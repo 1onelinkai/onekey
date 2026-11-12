@@ -1,0 +1,93 @@
+{
+  "claude": [
+    "maxTokens",
+    "reasoningEffort",
+    "subagentModel"
+  ],
+  "claude-desktop": [
+    "name",
+    "supports1m",
+    "reasoningEffort"
+  ],
+  "codex": [
+    "contextWindow",
+    "reasoningEffort",
+    "compactThreshold",
+    "reviewModel"
+  ],
+  "gemini": [
+    "name",
+    "maxTokens",
+    "thinkingBudget"
+  ],
+  "grok": [
+    "contextWindow"
+  ],
+  "opencode": [
+    "name",
+    "contextWindow",
+    "maxTokens"
+  ],
+  "openclaw": [
+    "name",
+    "contextWindow",
+    "maxTokens",
+    "supportsImages",
+    "supportsReasoning",
+    "reasoningEffort",
+    "subagentModel"
+  ],
+  "pi": [
+    "name",
+    "contextWindow",
+    "maxTokens",
+    "supportsImages",
+    "supportsReasoning",
+    "reasoningEffort"
+  ],
+  "minimax": [
+    "name",
+    "contextWindow",
+    "maxTokens",
+    "supportsImages"
+  ],
+  "deepseek-harness": [
+    "name",
+    "contextWindow",
+    "maxTokens",
+    "supportsImages"
+  ],
+  "zed": [
+    "name",
+    "contextWindow",
+    "maxTokens",
+    "supportsImages",
+    "supportsTools"
+  ],
+  "vscode": [
+    "name",
+    "contextWindow",
+    "maxTokens",
+    "supportsImages",
+    "supportsTools",
+    "supportsReasoning"
+  ],
+  "zcode": [
+    "name",
+    "contextWindow",
+    "maxTokens",
+    "supportsImages"
+  ],
+  "workbuddy": [
+    "name",
+    "contextWindow",
+    "maxTokens",
+    "supportsImages",
+    "supportsTools",
+    "supportsReasoning"
+  ],
+  "hermes": [
+    "contextWindow",
+    "reasoningEffort"
+  ]
+}

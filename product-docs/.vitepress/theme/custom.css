@@ -1,0 +1,25 @@
+:root {
+ --vp-c-brand-1:#176b50; --vp-c-brand-2:#218663; --vp-c-brand-3:#176b50;
+ --vp-c-brand-soft:rgba(23,107,80,.09); --vp-font-family-base:'PingFang SC','Noto Sans CJK SC','Microsoft YaHei',sans-serif;
+ --vp-font-family-mono:'SFMono-Regular','Cascadia Code',Consolas,monospace;
+ --vp-home-hero-name-color:#176b50; --vp-home-hero-image-background-image:none;
+ --vp-sidebar-width:280px; --vp-layout-max-width:1520px;
+}
+.dark { --vp-c-brand-1:#83cdb0; --vp-c-brand-2:#a5e2c9; --vp-c-brand-3:#218663; }
+.VPHero .name { letter-spacing:-.04em; }
+.VPHero .text { max-width:760px; letter-spacing:-.035em; }
+.VPHero .tagline { max-width:730px; line-height:1.8; }
+.VPDoc .content-container { max-width:840px!important; }
+.vp-doc p,.vp-doc li { line-height:1.95; }
+.vp-doc h2 { letter-spacing:-.015em; }
+.vp-doc table { width:100%; font-size:14px; }
+.vp-doc th { white-space:nowrap; }
+.vp-doc td code { overflow-wrap:anywhere; }
+.vp-doc a { text-underline-offset:4px; }
+.VPFeature { border-radius:8px!important; }
+.VPFeature .title { font-size:17px; }
+.VPFeature .details { line-height:1.9; }
+.vp-doc pre code { line-height:1.7; }
+.VPNavBarTitle .title { font-weight:650; letter-spacing:-.025em; }
+@media(min-width:1440px){.VPDoc.has-aside .content-container{max-width:840px!important;}}
+@media(max-width:640px){.vp-doc table{font-size:12px;}.vp-doc th,.vp-doc td{padding:8px 10px;}}

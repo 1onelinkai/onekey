@@ -1,0 +1,21 @@
+node_modules/
+dist/
+release/
+.DS_Store
+
+# Local environment and signing credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+
+# Local validation output and generated binaries
+/artifacts/
+/index-*.js
+/electron/native/*.node
+*.log
