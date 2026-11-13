@@ -82,20 +82,15 @@ build/          图标、构建权限及运行时配置
 scripts/        开发、打包与验证脚本
 product-docs/   用户说明与原理文档站
 docs/           接口契约、工程记录与项目截图
-官网/           独立产品官网
 ```
 
-## 文档与官网
+## 产品文档
 
 ```sh
 npm --prefix product-docs ci
 npm run docs:dev             # 文档站，默认 5175 端口
 npm run docs:check
 npm run docs:build
-
-npm --prefix 官网 ci
-npm run website:dev          # 独立官网，默认 5173 端口
-npm run website:build
 ```
 
 完整说明从 [产品文档首页](product-docs/pages/index.md) 开始。
@@ -105,5 +100,3 @@ npm run website:build
 平台会话与 BYOK 资料以本地加密文件保存，当前生产路径不读取系统钥匙串。密钥文件与密文位于同一用户目录，不能防御已经能读取二者的程序。目标工具的配置与恢复备份可能含明文凭据，请勿公开分享。
 
 配置写入成功与模型连接成功分别展示；连接测试会真实调用所选服务。退出平台登录不会撤销已写入工具的配置。
-
-部分工具的配置格式参考 [Magpie](https://github.com/yetone/magpie)，未复制其源代码。

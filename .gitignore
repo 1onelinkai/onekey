@@ -19,3 +19,6 @@ release/
 /index-*.js
 /electron/native/*.node
 *.log
+
+# Independent website kept locally
+/官网/
