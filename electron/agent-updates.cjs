@@ -18,6 +18,7 @@ function compareVersions(a, b) {
 function createAgentUpdates({ detect, installer, uninstallPlan, home = os.homedir(), system = environment(), fetcher = fetch }) {
   system = { ...environment(), ...system };
   async function latest(client) {
+    if (client === 'deepseek-harness-desktop') throw new Error('DSH 桌面版请使用应用内置更新或原安装渠道；CLI npm 版本不适用于桌面版');
     if (packages[client]) {
       const routes = await probeRoutes(npmRoutes, '/' + encodeURIComponent(packages[client]) + '/latest', text => {
         try { const data = JSON.parse(text); return data.name === packages[client] && !!parseVersion(data.version); } catch { return false; }
@@ -52,6 +53,7 @@ function createAgentUpdates({ detect, installer, uninstallPlan, home = os.homedi
     return { latestVersion: version, releaseVersion: rawVersion, source: client === 'hermes' ? 'GitHub 官方稳定版' : client === 'workbuddy' ? 'WorkBuddy 官方' : 'Homebrew Cask / 官方安装包' };
   }
   async function target(item) {
+    if (item.id === 'deepseek-harness-desktop') return { upgradable: false, origin: 'DSH 桌面应用', target: item.bundle, reason: '请使用桌面版内置更新或原安装渠道。' };
     const install = installationPlan(item.id, system);
     if (!install.supported) return { upgradable: false, origin: '当前系统不支持', reason: install.reason };
     const bin = path.join(home, '.onelinkai/managed/bin');
@@ -111,6 +113,7 @@ function createAgentUpdates({ detect, installer, uninstallPlan, home = os.homedi
           result.reason = '此平台的桌面应用请使用客户端内置更新或原安装渠道。';
           return result;
         }
+        if (item.id === 'deepseek-harness-desktop') { result.status = 'unsupported'; return result; }
         Object.assign(result, await latest(item.id));
         const comparison = compareVersions(result.latestVersion, result.currentVersion);
         result.status = comparison === null ? 'unknown' : comparison > 0 ? 'available' : comparison < 0 ? 'ahead' : 'current';

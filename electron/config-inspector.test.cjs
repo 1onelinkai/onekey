@@ -17,7 +17,7 @@ test('all 15 clients expose their actual config paths without installation or pr
     claude: '.claude/settings.json', 'claude-desktop': 'Library/Application Support/Claude/claude_desktop_config.json',
     codex: '.codex/config.toml', gemini: '.gemini/settings.json', grok: '.grok/config.toml', opencode: '.config/opencode/opencode.jsonc',
     openclaw: '.openclaw/openclaw.json', pi: '.pi/agent/settings.json', minimax: '.minimax/config.yaml',
-    'deepseek-harness': '.dsh/profiles/desktop/cordis.patch.yml', zed: '.config/zed/settings.json',
+    'deepseek-harness': '.dsh/profiles/web/cordis.patch.yml', 'deepseek-harness-desktop': '.dsh/profiles/desktop/cordis.patch.yml', zed: '.config/zed/settings.json',
     vscode: 'Library/Application Support/Code/User/settings.json', zcode: '.zcode/v2/config.json', workbuddy: '.workbuddy/models.json', hermes: '.hermes/config.yaml',
   };
   for (const [client, relative] of Object.entries(expected)) {

@@ -19,7 +19,8 @@
 | OpenClaw | npm `openclaw` 的 `latest` |
 | Pi | npm `@earendil-works/pi-coding-agent` 的 `latest` |
 | MiniMax Code | npm `@minimax-ai/code` 的 `latest` |
-| DeepSeek Harness | npm `@deepseek-ai/dsh` 的 `latest` |
+| DeepSeek Harness CLI | npm `@deepseek-ai/dsh` 的 `latest` |
+| DeepSeek Harness Desktop | 使用桌面版内置更新或原安装渠道，不查询 CLI npm 版本 |
 | Grok Build | xAI 两条官方端点的 `/stable` |
 | Hermes | 官方 GitHub 仓库 `/releases/latest` |
 | WorkBuddy | CodeBuddy 官方更新接口，按 darwin 与架构查询 |

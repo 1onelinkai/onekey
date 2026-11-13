@@ -33,6 +33,7 @@ async function fixture(t, fast = false) {
       '#!/bin/sh\nprintf "1.122.0\\n"\n',
       { mode: 0o700 },
     );
+  await fs.mkdir(path.join(root, "Applications/DeepSeek Harness.app"), { recursive: true });
   const secrets = new Map();
   const credentials = {
     get: async (url) => secrets.get(url) ?? null,
@@ -50,7 +51,7 @@ async function fixture(t, fast = false) {
     env: { PATH: bin },
     credentials,
     ...(fast ? { command: async () => ({ stdout: "1.122.0\n" }) } : {}),
-    applicationDirs: [],
+    applicationDirs: [path.join(root, "Applications")],
   });
   return { root, bin, service, secrets };
 }
@@ -93,7 +94,7 @@ test("detect DeepSeek Harness desktop without the CLI in either Applications dir
     await fs.mkdir(path.join(bundle, "Contents"), { recursive: true });
     await fs.writeFile(path.join(bundle, "Contents/Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>0.2.1-rc.3</string></dict></plist>`);
-    const client = (await service.detect()).find((c) => c.id === "deepseek-harness");
+    const client = (await service.detect()).find((c) => c.id === "deepseek-harness-desktop");
     assert.equal(client.installed, true);
     assert.equal(client.executable, null);
     assert.equal(client.bundle, bundle);
@@ -102,7 +103,7 @@ test("detect DeepSeek Harness desktop without the CLI in either Applications dir
     await fs.rm(bundle, { recursive: true });
   }
   await fs.mkdir(path.join(root, ".dsh"));
-  const missing = (await service.detect()).find((c) => c.id === "deepseek-harness");
+  const missing = (await service.detect()).find((c) => c.id === "deepseek-harness-desktop");
   assert.equal(missing.installed, false);
   assert.equal(missing.configExists, true);
 });
@@ -115,6 +116,7 @@ for (const client of [
   "pi",
   "minimax",
   "deepseek-harness",
+  "deepseek-harness-desktop",
   "zed",
   "zcode",
   "workbuddy",
@@ -125,7 +127,7 @@ for (const client of [
     const dir =
       client === "claude"
         ? path.join(root, ".claude")
-        : client === "deepseek-harness"
+        : ["deepseek-harness", "deepseek-harness-desktop"].includes(client)
           ? path.join(root, ".dsh")
         : client === "vscode"
           ? path.join(root, "Library/Application Support/Code/User")
@@ -153,7 +155,7 @@ for (const client of [
     assert.equal(result.verified, true);
     for (const file of plan.files) {
       const value = await fs.readFile(file.path, "utf8");
-      assert.ok(value.includes(client === "deepseek-harness" && file.path.endsWith(".credentials.yaml") ? "sk-test-private-secret" : "test-model"));
+      assert.ok(value.includes(["deepseek-harness", "deepseek-harness-desktop"].includes(client) && file.path.endsWith(".credentials.yaml") ? "sk-test-private-secret" : "test-model"));
       assert.equal((await fs.stat(file.path)).mode & 0o777, 0o600);
     }
     if (client === "zed") assert.equal(secrets.size, 1);
@@ -331,6 +333,77 @@ test("write and restore reject drift instead of overwriting changes", async (t) 
   await fs.appendFile(p2.files[0].path, "\n// new user comment");
   await assert.rejects(service.restore(r.id), /已变化/);
 });
+test("forced restore preserves changed files before restoring the original", async t => {
+  const { root, service } = await fixture(t, true);
+  const config = (await service.preview(input("opencode"))).files[0].path;
+  await fs.mkdir(path.dirname(config), { recursive: true });
+  const original = '{"theme":"original"}\n';
+  await fs.writeFile(config, original);
+  const plan = await service.preview(input("opencode"));
+  const entry = await service.apply(plan.token);
+  const file = entry.files.find(file => file.existed);
+  const changed = '{"theme":"changed-by-user"}\n';
+  await fs.writeFile(file.path, changed);
+  await assert.rejects(service.restore(entry.id), /已变化/);
+  const result = await service.restore(entry.id, { force: true });
+  assert.equal(await fs.readFile(file.path, "utf8"), original);
+  assert.equal(await fs.readFile(path.join(result.recoveryDir, file.index + ".bak"), "utf8"), changed);
+  assert.equal(JSON.parse(await fs.readFile(path.join(result.recoveryDir, "manifest.json"))).files.find(item => item.index === file.index).existed, true);
+  assert.equal((await service.history())[0].restored, true);
+});
+
+test("forced restore tolerates deleted new files and still requires original backups", async t => {
+  const { root, service } = await fixture(t, true);
+  const plan = await service.preview(input("codex", "responses"));
+  const entry = await service.apply(plan.token);
+  await fs.rm(entry.files[0].path);
+  const result = await service.restore(entry.id, { force: true });
+  for (const file of entry.files) await assert.rejects(fs.access(file.path), { code: "ENOENT" });
+  const manifest = JSON.parse(await fs.readFile(path.join(result.recoveryDir, "manifest.json")));
+  assert.equal(manifest.files[0].existed, false);
+
+  const next = await service.apply((await service.preview(input("codex", "responses"))).token);
+  const latest = await service.apply((await service.preview(input("codex", "responses"))).token);
+  const file = latest.files.find(file => file.existed);
+  await fs.rm(path.join(root, "state/backups", latest.id, file.index + ".bak"));
+  const current = await fs.readFile(file.path, "utf8");
+  await assert.rejects(service.restore(latest.id, { force: true }), /备份文件缺失/);
+  assert.equal(await fs.readFile(file.path, "utf8"), current);
+  assert.equal((await service.history()).find(item => item.id === next.id).restored, false);
+});
+
+test("manual restore exposes only the selected backup's file locations", async t => {
+  const { service } = await fixture(t, true);
+  const entry = await service.apply((await service.preview(input("codex", "responses"))).token);
+  const files = await service.restoreFiles(entry.id);
+  assert.deepEqual(files.map(file => file.path), entry.files.map(file => file.path));
+  assert.ok(files.every(file => file.exists && file.backupPath === null));
+  await assert.rejects(service.restoreFiles("unknown"), /备份不存在/);
+  await service.restore(entry.id);
+  await assert.rejects(service.restoreFiles(entry.id), /已恢复/);
+});
+
+test("failed forced restore rolls back missing files and the actual current credential", async t => {
+  const { root, service, secrets } = await fixture(t, true);
+  const entry = await service.apply((await service.preview(input("zed"))).token);
+  const url = [...secrets.keys()][0];
+  secrets.set(url, "user-updated-secret");
+  await fs.rm(entry.files[0].path);
+  const rename = fs.rename;
+  // Discover the journal path from the service's data directory, independent of its filename.
+  const journals = (await fs.readdir(path.join(root, "state"))).filter(name => name.endsWith(".json"));
+  fs.rename = async (...args) => {
+    if (journals.some(name => args[1] === path.join(root, "state", name))) throw new Error("injected journal failure");
+    return rename(...args);
+  };
+  try {
+    await assert.rejects(service.restore(entry.id, { force: true }), /injected journal failure/);
+    await assert.rejects(fs.access(entry.files[0].path), { code: "ENOENT" });
+    assert.equal(secrets.get(url), "user-updated-secret");
+    assert.equal((await service.history())[0].restored, false);
+  } finally { fs.rename = rename; }
+});
+
 test("write failure rolls earlier files back", async (t) => {
   const { service, root } = await fixture(t);
   const p = await service.preview(input("pi"));
@@ -387,7 +460,7 @@ test("protocol connection test accepts valid responses and rejects 200 error pay
     "profiles/desktop/cordis.patch.yml": "# keep patch\n- id: llm-pi-ai\n  config:\n    providers:\n      existing: { api: openai-completions, baseURL: 'https://existing/v1', models: [{ id: old }] }\n- id: ui-chat\n  config: { transcriptView: standard }\n"
   };
   for (const [name, value] of Object.entries(originals)) await fs.writeFile(path.join(dir, name), value);
-  const plan = await service.preview(input("deepseek-harness"));
+  const plan = await service.preview(input("deepseek-harness-desktop"));
   assert.ok(!JSON.stringify(plan).includes("another-private-key"));
   const result = await service.apply(plan.token);
   const YAML = require("yaml");
@@ -488,7 +561,7 @@ test('15 个应用的高级配置实际写入、保留原文件并逐字恢复',
     if (client === 'openclaw') { const v = readJSON('openclaw.json'); const m = v.models.providers.onelinkai.models[0]; assert.equal(m.contextWindow, 256000); assert.equal(m.maxTokens, 16000); assert.deepEqual(m.input, ['text', 'image']); assert.equal(m.reasoning, true); assert.equal(v.agents.defaults.thinkingDefault, 'high'); assert.equal(v.agents.defaults.subagents.model, 'onelinkai/helper-model'); }
     if (client === 'pi') { const m = readJSON('models.json').providers.onelinkai.models[0]; assert.equal(m.reasoning, true); assert.deepEqual(m.input, ['text', 'image']); assert.equal(readJSON('settings.json').defaultThinkingLevel, 'high'); }
     if (client === 'minimax') { const m = YAML.parse(contents.get('config.yaml')).custom_provider.onelinkai.models['test-model']; assert.deepEqual(m.limit, { context: 256000, output: 16000 }); assert.equal(m.capabilities.support_image, true); }
-    if (client === 'deepseek-harness') { const v = YAML.parse(contents.get('cordis.patch.yml')).find(item => item.id === 'llm-pi-ai').config.providers.onelinkai.models[0]; assert.equal(v.contextWindow, 256000); assert.equal(v.maxTokens, 16000); assert.deepEqual(v.input, ['text', 'image']); }
+    if (['deepseek-harness', 'deepseek-harness-desktop'].includes(client)) { const v = YAML.parse(contents.get('cordis.patch.yml')).find(item => item.id === 'llm-pi-ai').config.providers.onelinkai.models[0]; assert.equal(v.contextWindow, 256000); assert.equal(v.maxTokens, 16000); assert.deepEqual(v.input, ['text', 'image']); }
     if (client === 'zcode') { const m = readJSON('config.json').provider.onelinkai.models['test-model']; assert.equal(m.contextWindow, 256000); assert.equal(m.maxOutputTokens, 16000); assert.deepEqual(m.modalities.input, ['text', 'image']); }
     if (client === 'hermes') { const v = YAML.parse(contents.get('config.yaml')); assert.equal(v.providers.onelinkai.models['test-model'].context_length, 256000); assert.equal(v.model.context_length, 256000); assert.equal(v.agent.reasoning_effort, 'high'); assert.ok(!contents.get('config.yaml').includes('max_tokens')); }
     if (client === 'zed') { const m = readJSON('settings.json').language_models.openai_compatible.OneLinkAI.available_models[0]; assert.equal(m.capabilities.images, true); assert.equal(m.capabilities.tools, false); }
@@ -514,4 +587,123 @@ test('Codex rejects preserved compaction threshold above a new smaller window', 
   const original = 'model_auto_compact_token_limit = 200000\n'; await fs.writeFile(path.join(dir, 'config.toml'), original);
   await assert.rejects(service.preview({ ...input('codex', 'responses'), modelSettings: { contextWindow: 128000 } }), /阈值/);
   assert.equal(await fs.readFile(path.join(dir, 'config.toml'), 'utf8'), original);
+});
+
+test('DSH detects CLI and Desktop independently, with independent versions and evidence', async t => {
+  const { root, bin } = await fixture(t, true);
+  const appDir = path.join(root, 'Applications');
+  const bundle = path.join(appDir, 'DeepSeek Harness.app');
+  const service = createAgentService({ home: root, dataDir: path.join(root, 'state'), platform: 'darwin',
+    env: { PATH: bin }, applicationDirs: [appDir],
+    command: async (file, args) => ({ stdout: file === path.join(bin, 'dsh') ? '0.2.1-rc.2' : args.some(arg => arg.includes('CFBundleShortVersionString')) ? '0.2.1-rc.3' : '' }),
+  });
+  await fs.rm(bundle, { recursive: true });
+  let all = await service.detect();
+  assert.equal(all.find(c => c.id === 'deepseek-harness').installed, true);
+  assert.equal(all.find(c => c.id === 'deepseek-harness-desktop').installed, false);
+  await fs.mkdir(bundle, { recursive: true });
+  all = await service.detect();
+  const cli = all.find(c => c.id === 'deepseek-harness');
+  const desktop = all.find(c => c.id === 'deepseek-harness-desktop');
+  assert.equal(cli.version, '0.2.1-rc.2');
+  assert.equal(cli.executable, path.join(bin, 'dsh')); assert.equal(cli.bundle, undefined);
+  assert.equal(desktop.version, '0.2.1-rc.3');
+  assert.equal(desktop.bundle, bundle); assert.equal(desktop.executable, null);
+  await fs.rm(path.join(bin, 'dsh'));
+  all = await service.detect();
+  assert.equal(all.find(c => c.id === 'deepseek-harness').installed, false);
+  assert.equal(all.find(c => c.id === 'deepseek-harness-desktop').installed, true);
+});
+
+test('DSH CLI profiles and Desktop keep separate patches and credential references', async t => {
+  const { root, service } = await fixture(t, true);
+  const YAML = require('yaml');
+  const desktop = await service.apply((await service.preview({ ...input('deepseek-harness-desktop'), apiKey: 'sk-desktop-secret' })).token);
+  const desktopFile = path.join(root, '.dsh/profiles/desktop/cordis.patch.yml');
+  const before = await fs.readFile(desktopFile, 'utf8');
+  for (const profile of ['web', 'headless', 'custom-Web']) {
+    const request = { ...input('deepseek-harness'), apiKey: 'sk-cli-secret-' + profile, ...(profile === 'web' ? {} : { dshProfile: profile }) };
+    const plan = await service.preview(request);
+    assert.match(plan.notice, new RegExp('dsh --profile ' + profile));
+    assert.ok(plan.files.some(f => f.path.endsWith('/profiles/' + profile + '/cordis.patch.yml')));
+    assert.ok(!JSON.stringify(plan).includes('sk-desktop-secret'));
+    const result = await service.apply(plan.token);
+    assert.equal(result.dshProfile, profile); assert.equal(result.client, 'deepseek-harness');
+    const patch = YAML.parse(await fs.readFile(path.join(root, '.dsh/profiles', profile, 'cordis.patch.yml'), 'utf8'));
+    const ref = patch.find(p => p.id === 'llm-pi-ai').config.providers.onelinkai.apiKeyEnv;
+    assert.notEqual(ref, 'ONELINKAI_API_KEY');
+    const creds = YAML.parse(await fs.readFile(path.join(root, '.dsh/.credentials.yaml'), 'utf8'));
+    assert.equal(creds.refs.ONELINKAI_API_KEY, 'sk-desktop-secret');
+    assert.equal(creds.refs[ref], request.apiKey);
+    assert.equal(await fs.readFile(desktopFile, 'utf8'), before);
+    // Restore the last operation to exercise shared-file hash protection and exact recovery.
+    await service.restore(result.id);
+  }
+  await service.restore(desktop.id);
+});
+
+test('DSH profile validation blocks desktop, traversal and invalid names before writes', async t => {
+  const { root, service } = await fixture(t, true);
+  for (const dshProfile of ['desktop', 'Desktop', '../desktop', '', '/tmp/config', 'a/b', 'a\\b', '.', 12])
+    await assert.rejects(service.preview({ ...input('deepseek-harness'), dshProfile }), /profile 无效/);
+  await assert.rejects(fs.access(path.join(root, '.dsh')), { code: 'ENOENT' });
+});
+
+test('DSH legacy desktop history is attributed to Desktop and remains restorable', async t => {
+  const { root, service } = await fixture(t, true);
+  const result = await service.apply((await service.preview(input('deepseek-harness-desktop'))).token);
+  const journal = path.join(root, 'state/history.json');
+  const entries = JSON.parse(await fs.readFile(journal, 'utf8'));
+  entries[0].client = 'deepseek-harness'; delete entries[0].dshProfile;
+  await fs.writeFile(journal, JSON.stringify(entries));
+  const [entry] = await service.history();
+  assert.equal(entry.client, 'deepseek-harness-desktop'); assert.equal(entry.dshProfile, 'desktop');
+  assert.equal(entry.id, result.id);
+  await service.restore(entry.id);
+  assert.equal((await service.history())[0].restored, true);
+});
+
+test('fresh installation recovers on-disk models without its configuration journal', async t => {
+  const { root, bin, service } = await fixture(t, true);
+  const clients = ['claude', 'claude-desktop', 'codex', 'gemini', 'grok', 'opencode', 'openclaw', 'pi', 'minimax', 'deepseek-harness', 'deepseek-harness-desktop', 'zed', 'vscode', 'zcode', 'workbuddy', 'hermes'];
+  for (const client of clients) {
+    const protocol = ['claude', 'claude-desktop'].includes(client) ? 'anthropic' : client === 'gemini' ? 'gemini' : ['codex', 'grok'].includes(client) ? 'responses' : 'openai';
+    const preview = await service.preview({ ...input(client, protocol), model: 'claude-sonnet-recovery' });
+    await service.apply(preview.token);
+  }
+  // Simulate a fresh OneLinkAI data directory while keeping installed clients and their settings.
+  const fresh = createAgentService({ home: root, dataDir: path.join(root, 'fresh-state'), platform: 'darwin', env: { PATH: bin }, applicationDirs: [path.join(root, 'Applications')], command: async () => ({ stdout: '1.0.0' }) });
+  assert.deepEqual(await fresh.history(), []);
+  const detected = await fresh.detect();
+  for (const client of clients) {
+    const configuration = detected.find(item => item.id === client).configuration;
+    assert.equal(configuration.state, 'configured', client);
+    assert.ok(configuration.models.includes('claude-sonnet-recovery'), client);
+    assert.equal(configuration.count, 1, client);
+    if (!['workbuddy', 'vscode', 'zcode'].includes(client)) assert.equal(configuration.model, 'claude-sonnet-recovery', client);
+    assert.equal(JSON.stringify(configuration).includes('sk-test-private-secret'), false, client);
+  }
+  assert.deepEqual(await fresh.history(), []);
+  await fs.writeFile(path.join(root, '.codex/config.toml'), 'model="externally-changed"\n');
+  assert.equal((await fresh.detect()).find(item => item.id === 'codex').configuration.model, 'externally-changed');
+  await fs.writeFile(path.join(root, '.codex/config.toml'), 'invalid = [');
+  assert.equal((await fresh.detect()).find(item => item.id === 'codex').configuration.state, 'unreadable');
+  await fs.rm(path.join(root, '.codex/config.toml'));
+  assert.equal((await fresh.detect()).find(item => item.id === 'codex').configuration.state, 'none');
+});
+
+test('selection readers recover client choices without a journal or model registry', async t => {
+  const { root, bin } = await fixture(t, true);
+  const service = createAgentService({
+    home: root, env: { PATH: bin }, platform: 'darwin', dataDir: path.join(root, 'fresh-state'),
+    applicationDirs: [path.join(root, 'Applications')], command: async () => ({ stdout: '1.0.0' }),
+    readClientSelection: async id => id === 'vscode' ? { model: 'chosen-in-client', selectionSource: 'last-selection' } : null,
+  });
+  const config = (await service.detect()).find(item => item.id === 'vscode').configuration;
+  assert.equal(config.model, 'chosen-in-client');
+  assert.equal(config.state, 'configured');
+  assert.equal(config.count, 1);
+  assert.deepEqual(config.models, ['chosen-in-client']);
+  assert.equal(config.selectionSource, 'last-selection');
+  assert.equal(config.selectionStatus, undefined);
 });

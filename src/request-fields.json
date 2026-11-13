@@ -28,5 +28,17 @@
   ["responseStatus", "响应状态"],
   ["streamStatusCode", "流式状态码"],
   ["streamStatus", "流式结束信息"],
-  ["id", "生成 ID"]
+  ["id", "生成 ID"],
+  ["modelType", "模型类型"],
+  ["consumptionType", "付费类型"],
+  ["firstLatency", "首字延迟（ms）"],
+  ["totalLatency", "端到端耗时（ms）"],
+  ["endReason", "结束原因"],
+  ["dataRetentionSwitch", "日志模式"],
+  ["callType", "调用类型"],
+  ["taskStatus", "任务状态"],
+  ["retryCount", "供应商重试次数"],
+  ["supplierTimeline", "供应商调用过程"],
+  ["toolCallDetails", "工具调用详情"],
+  ["consumptionId", "消费记录 ID"]
 ]

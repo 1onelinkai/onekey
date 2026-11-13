@@ -4,7 +4,7 @@
 
 ## 展示范围
 
-所有 15 个客户端都有预定义候选文件。配置目录遵循检测 / 写入所用环境变量；另外按规则发现 Claude Desktop configLibrary、DSH profiles、VS Code profiles 里的候选文件，最多展示 40 个。
+所有 16 个客户端入口都有预定义候选文件。配置目录遵循检测 / 写入所用环境变量；另外按规则发现 Claude Desktop configLibrary、DSH profiles、VS Code profiles 里的候选文件，最多展示 40 个。
 
 项目目录的 `.env`、项目级配置、命令行参数和运行时环境并没有被自动合并成“最终有效配置”。查看用户文件不等于完整复现 Agent 的配置优先级。
 

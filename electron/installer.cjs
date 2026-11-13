@@ -48,6 +48,7 @@ const guides = {
   openclaw: 'https://github.com/openclaw/openclaw',
   minimax: 'https://github.com/MiniMax-AI/MiniMax-M2',
   'deepseek-harness': 'https://github.com/deepseek-ai/deepseek-harness',
+  'deepseek-harness-desktop': 'https://github.com/deepseek-ai/deepseek-harness',
 };
 
 function environment({ platform = process.platform, arch = process.arch, machine = os.machine(), release = os.release(), env = process.env } = {}) {

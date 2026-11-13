@@ -27,6 +27,7 @@ const { pathToFileURL } = require("node:url");
 const smokeTest = process.argv.includes("--smoke-test");
 const flowTest = process.argv.includes("--flow-test");
 let testRoot;
+const agentLaunchRequests = [];
 let modelServer;
 const developmentUrl = !app.isPackaged && process.env.ONELINK_DEV_URL;
 const entryUrl =
@@ -199,6 +200,7 @@ function createWindow() {
           if (getComputedStyle(tooltip).visibility !== 'visible') throw new Error('Tooltip must show on keyboard focus');
           info.blur(); info.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); await new Promise(resolve => setTimeout(resolve, 50));
           if (getComputedStyle(tooltip).visibility !== 'hidden') throw new Error('Tooltip must hide after focus leaves');
+          await click('Codex 更多操作');
           await click('查看 Codex 本机配置');
           await wait(() => document.querySelector('.config-file-code'));
           if (!document.querySelector('.config-file-code').textContent.includes('local-config-flow')) throw new Error('Config reader must show actual disk contents');
@@ -229,11 +231,24 @@ function createWindow() {
           await wait(()=>document.querySelector('.table-actions button'));document.querySelector('.table-actions button').click();
           await wait(()=>document.querySelector('.model-picker button') && [...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='预览配置'&&!b.disabled));
           if(document.querySelector('input[type=password]'))throw new Error('Configuration asks for key again');
+          const sourceSelect = document.querySelector('select[aria-label="配置来源"]');
+          const secondKey = [...sourceSelect.options].filter(option => option.value.startsWith('key:'))[1];
+          if (!secondKey) throw new Error('Missing second key fixture');
+          Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sourceSelect, secondKey.value);
+          sourceSelect.dispatchEvent(new Event('change', { bubbles: true }));
+          await wait(() => document.querySelector('.model-picker button.picked') && !document.querySelector('.model-loading'));
+          if (document.querySelector('.model-picker').textContent.includes('密钥列表已失效')) throw new Error('Switching keys invalidates the model list');
           await click('预览配置');
           await wait(()=>[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='确认写入'));await click('确认写入');
           await wait(()=>[...document.querySelectorAll('h2')].some(h=>h.textContent==='配置文件已写入并回读校验'));
           await click('完成');await wait(()=>document.querySelector('.restore-button'));
-          await click('恢复备份');await wait(()=>[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='确认恢复'));await click('确认恢复');
+          await click('恢复备份');await wait(()=>[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='确认恢复'));
+          await click('手动修改'); await wait(()=>document.querySelector('.manual-restore-files code'));
+          if (![...document.querySelectorAll('.restore-file-actions button')].some(b=>b.textContent==='打开当前文件位置')) throw new Error('Manual restore must expose current file locations');
+          await click('返回'); await click('强制恢复');
+          if (!document.querySelector('.modal').innerText.includes('自动备份当前文件')) throw new Error('Forced restore must explain safety backups');
+          if (![...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='确认强制恢复')) throw new Error('Forced restore must require confirmation');
+          await click('返回'); await click('确认恢复');
           await wait(()=>document.querySelector('.data-table .pill')?.textContent==='已恢复');
           await click('请求记录');await wait(()=>document.querySelector('.request-empty'));
           const invoke = async (name, input) => { const r = await window.onelinkDesktop[name](input); if(!r.ok) throw new Error(r.error); return r.data; };
@@ -310,7 +325,7 @@ function createWindow() {
           const clients = [
             ['claude', 'Claude Code', 'anthropic'], ['claude-desktop', 'Claude Desktop', 'anthropic'], ['codex', 'Codex', 'responses'],
             ['gemini', 'Gemini CLI', 'gemini'], ['grok', 'Grok Build', 'responses'], ['opencode', 'OpenCode', 'openai'], ['openclaw', 'OpenClaw', 'openai'],
-            ['pi', 'Pi', 'openai'], ['minimax', 'MiniMax Code', 'openai'], ['deepseek-harness', 'DeepSeek Harness', 'openai'], ['zed', 'Zed', 'openai'],
+            ['pi', 'Pi', 'openai'], ['minimax', 'MiniMax Code', 'openai'], ['deepseek-harness', 'DeepSeek Harness CLI', 'openai'], ['deepseek-harness-desktop', 'DeepSeek Harness Desktop', 'openai'], ['zed', 'Zed', 'openai'],
             ['vscode', 'VS Code', 'openai'], ['zcode', 'ZCode', 'openai'], ['workbuddy', 'WorkBuddy', 'openai'], ['hermes', 'Hermes', 'openai'],
           ];
           const setSelect = (element, value) => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(element, value); element.dispatchEvent(new Event('change', { bubbles: true })); };
@@ -322,6 +337,12 @@ function createWindow() {
             if (!button || button.disabled) throw new Error('Application not selectable: ' + name);
             button.click(); await new Promise(resolve => setTimeout(resolve, 50));
             setSelect(document.querySelector('#protocol'), protocol); await new Promise(resolve => setTimeout(resolve, 50));
+            if (id === 'deepseek-harness') {
+              const profileInput = document.querySelector('input[aria-label="DSH CLI Profile"]');
+              if (!profileInput || profileInput.value !== 'web') throw new Error('DSH CLI must default to web profile');
+              setInput(profileInput, 'flow-custom');
+              await new Promise(resolve => setTimeout(resolve, 50));
+            }
             const advanced = document.querySelector('.configuration-advanced');
             advanced.open = true;
             for (const [field, label] of [['contextWindow', '上下文窗口'], ['maxTokens', '最大输出 Token']]) {
@@ -341,17 +362,27 @@ function createWindow() {
             }
             if (!document.querySelector('.preview-code [class*=hljs-]')) throw new Error('Missing preview highlighting: ' + name);
             if (!preview.includes('claude-sonnet-flow-test')) throw new Error('Preview missing selected model: ' + name);
+            if (id === 'deepseek-harness' && !document.body.innerText.includes('flow-custom')) throw new Error('DSH CLI profile was lost over IPC');
+            if (id === 'deepseek-harness-desktop' && document.querySelector('input[aria-label="DSH CLI Profile"]')) throw new Error('Desktop must not use the CLI profile control');
             if (id === 'vscode' && !document.body.innerText.includes('密钥尚未写入')) throw new Error('Missing VS Code credential step');
             verifiedClients.push(id);
             await click('关闭');
           }
-          if (verifiedClients.length !== 15) throw new Error('Incomplete application coverage');
+          if (verifiedClients.length !== 16) throw new Error('Incomplete application coverage');
           await click('概览');await wait(()=>document.querySelector('.overview-stats'));
+          for (const [name, message] of [['DeepSeek Harness CLI', 'DSH CLI'], ['DeepSeek Harness Desktop', '桌面应用']]) {
+            const launch = document.querySelector('button[aria-label="运行 ' + name + '"]');
+            if (!launch || launch.disabled) throw new Error('Missing launch button: ' + name);
+            launch.click();
+            await wait(() => document.querySelector('.toast')?.textContent.includes(message));
+          }
           await click('模型服务商'); await click('刷新'); await wait(()=>document.querySelector('.provider-models .pill'));
           await click('编辑模型资料'); await wait(()=>document.querySelector('.model-settings-editor'));
           document.querySelector('.model-settings-editor').scrollIntoView({block:'start'});
           return {uiFlow:true, automaticBackgroundUpdates:true, installationCapabilitiesVisible:true, compactManagementTooltip:true, localConfigReader:true, providerEditSyncDefaultAndConfig:true, sharedModelLimitsAndCapabilities:true, allApplicationControls:verifiedClients, platformKeyReused:true, modelsFetched:true, history:await window.onelinkDesktop.history()};
         })()`);
+        if (!agentLaunchRequests.some(value => value.kind === 'terminal') || !agentLaunchRequests.some(value => value.kind === 'desktop' && value.target.endsWith('DeepSeek Harness.app')))
+          throw new Error('Agent launch IPC did not reach the expected terminal and desktop targets');
         const exists = await fs
           .access(path.join(testRoot, ".claude/settings.json"))
           .then(
@@ -415,6 +446,21 @@ function createWindow() {
           mainWindow.setSize(width, height);
           await new Promise(resolve => setTimeout(resolve, 150));
           tooltipChecks.push(await mainWindow.webContents.executeJavaScript(`(async () => {
+            for (const footer of document.querySelectorAll('.agent-tile-footer')) {
+              if (footer.scrollWidth > footer.clientWidth + 1) throw new Error('Card footer overflows');
+              if (footer.querySelectorAll(':scope > button').length > 3) throw new Error('Too many visible card actions');
+              for (const button of footer.querySelectorAll(':scope > button')) {
+                if (button.getBoundingClientRect().height > 34) throw new Error('Card action wrapped');
+              }
+            }
+            const more = document.querySelector('.agent-more-button');
+            more.click();
+            const menu = [...document.querySelectorAll('.agent-card-menu')].find(panel => panel.matches(':popover-open'));
+            if (!menu || !menu.textContent.includes('本机配置') || !menu.textContent.includes('卸载客户端')) throw new Error('Missing secondary card actions');
+            const menuBounds = menu.getBoundingClientRect();
+            if (menuBounds.left < 0 || menuBounds.top < 0 || menuBounds.right > innerWidth || menuBounds.bottom > innerHeight) throw new Error('Card menu clipped');
+            menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            if (menu.matches(':popover-open') || document.activeElement !== more) throw new Error('Menu Escape must restore trigger focus');
             const info = document.querySelector('.agent-info-button');
             const anchor = info.parentElement;
             const panel = anchor.querySelector('[role="tooltip"]');
@@ -445,6 +491,7 @@ function createWindow() {
         console.log(JSON.stringify({ tooltipViewportChecks: tooltipChecks }));
         mainWindow.setSize(960, 720);
         await mainWindow.webContents.executeJavaScript(`(async () => {
+          document.querySelector('button[aria-label="Codex 更多操作"]').click();
           document.querySelector('button[aria-label="查看 Codex 本机配置"]').click();
           for (let i = 0; i < 100 && !document.querySelector('.config-file-code'); i++) await new Promise(resolve => setTimeout(resolve, 50));
         })()`);
@@ -540,16 +587,40 @@ app.whenReady().then(async () => {
     await fs.mkdir(path.join(testRoot, '.codex'), { recursive: true });
     await fs.writeFile(path.join(testRoot, '.codex/config.toml'), 'model = "local-config-flow"\nmodel_context_window = 128000\n[model_providers.custom]\nbase_url = "https://example.com/v1"\nexperimental_bearer_token = "reader-private-fixture"\n');
     await fs.writeFile(path.join(testRoot, '.codex/auth.json'), '{"token":"reader-auth-private-fixture"}');
+    await fs.mkdir(path.join(testRoot, "Applications/DeepSeek Harness.app"), { recursive: true });
     testOptions = {
       home: testRoot,
       env: { PATH: bin },
-      applicationDirs: [],
+      applicationDirs: [path.join(testRoot, "Applications")],
       dataDir: path.join(testRoot, "state"),
     };
   }
+  const workbuddySelection = require('./workbuddy-selection.cjs').createWorkbuddySelectionReader({
+    BrowserWindow, session,
+    configDirectory: process.env.WORKBUDDY_CONFIG_DIR || path.join(require('node:os').homedir(), '.workbuddy'),
+    legacySessionDirectory: path.join(app.getPath('appData'), 'WorkBuddy'),
+  });
+  const zcodeSelection = require('./workbuddy-selection.cjs').createLocalSelectionReader({
+    BrowserWindow, session, client: 'zcode',
+    directories: [path.join(app.getPath('appData'), 'ZCode/session')],
+  });
   const agents = createAgentService({
+    ...(!flowTest ? { readClientSelection: (client, directory) => {
+      if (client === 'workbuddy') return workbuddySelection();
+      if (client === 'zcode') return zcodeSelection();
+      if (client === 'vscode') return require('./vscode-selection.cjs').readVscodeSelection(directory);
+      return null;
+    } } : {}),
     dataDir: path.join(app.getPath("userData"), "agent-config"),
     ...testOptions,
+  });
+  const launcher = require('./agent-launcher.cjs').createAgentLauncher({
+    detect: () => agents.detect(), history: () => agents.history(),
+    openPath: value => flowTest ? (agentLaunchRequests.push({ kind: 'desktop', target: value }), '') : shell.openPath(value),
+    ...(flowTest ? { home: testRoot, env: testOptions.env,
+      execute: async (file, args) => { agentLaunchRequests.push({ kind: 'terminal', file, args }); if (file === '/usr/bin/open') await fs.rm(path.dirname(args.at(-1)), { recursive: true, force: true }); },
+      start: async (file, args) => { agentLaunchRequests.push({ kind: 'process', file, args }); },
+    } : {}),
   });
   const keyStore = flowTest ? createPlatformService({
     modelEndpoint: flowTest ? 'http://127.0.0.1:' + modelServer.address().port : undefined,
@@ -576,7 +647,7 @@ app.whenReady().then(async () => {
       const savedModel = provider.models.find(model => model.id === input.model && model.enabled);
       if (!savedModel) throw new Error('请选择此服务商已启用的模型');
       const modelSettings = input.modelSettings === undefined ? savedModel : { name: savedModel.name, ...input.modelSettings };
-      return { client: input.client, model: input.model, protocol: input.protocol || provider.protocol, apiKey: provider.apiKey, baseURL: provider.baseURL, modelSettings };
+      return { client: input.client, model: input.model, protocol: input.protocol || provider.protocol, apiKey: provider.apiKey, baseURL: provider.baseURL, modelSettings, dshProfile: input.dshProfile };
     }
     const key = await keyStore.get(input?.keyId);
     return {
@@ -586,12 +657,14 @@ app.whenReady().then(async () => {
       apiKey: key.secret,
       baseURL: key.baseURL,
       modelSettings: input.modelSettings,
+      dshProfile: input.dshProfile,
     };
   };
   for (const [channel, handler] of Object.entries({
     'software-update-status': () => softwareUpdates.status(),
     'software-update-check': () => softwareUpdates.check(true),
     detect: async () => updates.describe(await agents.detect()),
+    'launch-agent': client => launcher.launch(client),
     "inspect-config": client => agents.inspectConfig(client),
     "auth-status": () => flowTest ? demoStatus : keyStore.status(),
     login: () => flowTest ? demoStatus : platformLogin.login(mainWindow),
@@ -610,7 +683,17 @@ app.whenReady().then(async () => {
     },
     preview: async (input) => agents.preview(await withKey(input)),
     apply: (token) => agents.apply(token),
-    restore: (id) => agents.restore(id),
+    restore: input => typeof input === 'string' ? agents.restore(input) : agents.restore(input?.id, { force: input?.force === true }),
+    'restore-files': id => agents.restoreFiles(id),
+    'reveal-restore-file': async input => {
+      const files = await agents.restoreFiles(input?.id);
+      const file = files.find(item => item.index === input?.index);
+      const target = input?.backup === true ? file?.backupPath : file?.exists ? file.path : null;
+      if (!target) throw new Error('文件不存在，无法打开位置');
+      await fs.access(target);
+      shell.showItemInFolder(target);
+      return { revealed: true };
+    },
     history: () => agents.history(),
     test: async (input) => testConnection(await withKey(input)),
     keys: (org) => keyStore.list(org),

@@ -1,4 +1,4 @@
-# 15 个 Agent 配置总表
+# 16 个 Agent 配置总表
 
 这里列出当前适配器实际覆盖的客户端。每个详情页包含写入范围、原生字段、凭据位置、最小与高级参数生成示例、手动步骤及限制。所有示例由实际适配器离线生成。
 
@@ -13,7 +13,8 @@
 | [OpenClaw](/reference/agents/openclaw) | ~/.openclaw | openai | 按原生文件写入 |
 | [Pi](/reference/agents/pi) | ~/.pi/agent | openai | 按原生文件写入 |
 | [MiniMax Code](/reference/agents/minimax) | ~/.minimax | openai | 按原生文件写入 |
-| [DeepSeek Harness](/reference/agents/deepseek-harness) | ~/.dsh | openai | 按原生文件写入 |
+| [DeepSeek Harness CLI](/reference/agents/deepseek-harness) | ~/.dsh | openai | 按原生文件写入 |
+| [DeepSeek Harness Desktop](/reference/agents/deepseek-harness-desktop) | ~/.dsh | openai | 按原生文件写入 |
 | [Zed](/reference/agents/zed) | ~/.config/zed（macOS） | openai | 在目标应用手动保存 |
 | [VS Code](/reference/agents/vscode) | ~/Library/Application Support/Code/User（macOS） | openai | 在目标应用手动保存 |
 | [ZCode](/reference/agents/zcode) | ~/.zcode/v2 | openai | 按原生文件写入 |

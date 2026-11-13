@@ -30,9 +30,11 @@ import {
   Filter,
   Pencil,
   FileCode2,
+  Play,
 } from "lucide-react";
 import "./desktop.css";
 import "./soft-theme.css";
+import { parseConfigSource, selectAvailableModel, configModelPresentation } from "./config-selection.mjs";
 import requestFields from "./request-fields.json";
 import clientCapabilities from "./client-capabilities.json";
 import clientSettingNotes from "./client-setting-notes.json";
@@ -40,6 +42,7 @@ import ModelSettingsFields from "./ModelSettingsFields.jsx";
 import ModelImportDialog from "./ModelImportDialog.jsx";
 import ClientConfigViewer from "./ClientConfigViewer.jsx";
 import ConfigCode from "./ConfigCode.jsx";
+import AgentCardMenu from "./AgentCardMenu.jsx";
 import AgentDetailsTooltip from "./AgentDetailsTooltip.jsx";
 import SoftwareUpdate from "./SoftwareUpdate.jsx";
 const emptyProvider = () => ({ name: "", baseURL: "https://api.openai.com", protocol: "openai", apiKey: "", notes: "", website: "" });
@@ -50,11 +53,21 @@ import brandWordmark from "./assets/brand/onelink-wordmark.png";
 function requestValue(key, value) {
   if (value == null || value === "") return "—";
   if (key === "invokeTime") return time(value);
+  const labels = {
+    dataRetentionSwitch: { 0: '完整日志', 1: '隐私模式（不保留正文）' },
+    consumptionType: { 1: '余额', 2: '赠金', 3: '组合', 4: '免费', 5: '信用支付' },
+    endReason: { stop: '正常结束', length: '长度限制', content_filter: '内容过滤', tool_calls: '工具调用', all_failed: '所有供应商均失败' },
+    callType: { async: '异步', sync: '同步' },
+    taskStatus: { processing: '处理中', success: '成功', failed: '失败' },
+    responseStatus: { success: '成功', processing: '处理中' },
+  };
+  if (labels[key]?.[value]) return labels[key][value];
   if (key === "trainPolicy") return Number(value) === 1 ? "有数据培训" : Number(value) === 0 ? "无数据培训" : String(value);
   return typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
 }
+function keyTypeLabel(key) { return key.keyType === 1 ? '组织密钥' : key.keyType === 0 ? '个人密钥' : '类型未返回'; }
 const usageFields = requestFields.slice(7, 22);
-const emptyRequestFilters = () => ({ modelId: '', supplierId: '', modelTypes: '', startTime: '', endTime: '' });
+const emptyRequestFilters = () => ({ userId: '', modelId: '', supplierId: '', modelTypes: '', startTime: '', endTime: '' });
 const clientLogos = import.meta.glob("./assets/clients/*.{png,svg,ico}", {
   eager: true,
   query: "?url",
@@ -72,7 +85,8 @@ const catalog = [
   ["openclaw", "OpenClaw", "Open source", "◆", "rose"],
   ["pi", "Pi", "Terminal agent", "π", "yellow"],
   ["minimax", "MiniMax Code", "MiniMax", "〽", "peach"],
-  ["deepseek-harness", "DeepSeek Harness", "DeepSeek", "◈", "mint"],
+  ["deepseek-harness", "DeepSeek Harness CLI", "DeepSeek", "◈", "mint"],
+  ["deepseek-harness-desktop", "DeepSeek Harness Desktop", "DeepSeek", "◈", "mint"],
   ["zed", "Zed", "Code editor", "Z", "blue"],
   ["vscode", "VS Code", "Microsoft", "⌁", "sky"],
   ["zcode", "ZCode", "智谱 AI", "Z", "lavender"],
@@ -83,7 +97,7 @@ const pages = {
     title: "工作空间概览",
     subtitle: "你的模型、密钥与 AI 工具，尽在一处。",
   },
-  keys: { title: "API Keys", subtitle: "当前组织在 OneLinkAI 平台创建的 API 密钥。" },
+  keys: { title: "API Keys", subtitle: "查看当前空间的个人密钥与组织密钥。" },
   history: { title: "配置记录", subtitle: "查看本机配置变更与备份。" },
   requests: { title: "请求记录", subtitle: "查看 API Key 的请求与使用情况。" },
   providers: { title: "模型服务商", subtitle: "管理自己的 API 地址、密钥和模型，一键配置到本机客户端。" },
@@ -96,7 +110,7 @@ async function invoke(method, value) {
   return r.data;
 }
 function Icon({ c }) {
-  const logoId = c.id === "claude-desktop" ? "claude" : c.id;
+  const logoId = c.id === "claude-desktop" ? "claude" : c.id === "deepseek-harness-desktop" ? "deepseek-harness" : c.id;
   const logo = ["png", "svg", "ico"]
     .map((extension) => clientLogos[`./assets/clients/${logoId}.${extension}`])
     .find(Boolean);
@@ -177,6 +191,7 @@ export default function DesktopApp() {
     [requestKey, setRequestKey] = useState(""),
     [requestPage, setRequestPage] = useState(1),
     [requestPageSize, setRequestPageSize] = useState(20),
+    [keyTypeFilter, setKeyTypeFilter] = useState(''),
     [requestDraft, setRequestDraft] = useState(emptyRequestFilters),
     [requestFilters, setRequestFilters] = useState(emptyRequestFilters),
     [requestOptions, setRequestOptions] = useState({ models: [], suppliers: [], types: [] }),
@@ -191,7 +206,8 @@ export default function DesktopApp() {
   const [modelOverrides, setModelOverrides] = useState({});
   const [configPane, setConfigPane] = useState('local');
   const [previewPath, setPreviewPath] = useState('');
-  useEffect(() => { setPlan(null); setTested(false); }, [clientId, model, protocol, activeKey, providerId, modelOverrides]);
+  const [dshProfile, setDshProfile] = useState('web');
+  useEffect(() => { setPlan(null); setTested(false); }, [clientId, model, protocol, activeKey, providerId, modelOverrides, dshProfile]);
   const returningModelOverrides = useRef(null);
   const configDetailsRef = useRef(null);
   const configInspectorRef = useRef(null);
@@ -206,6 +222,9 @@ export default function DesktopApp() {
   const [requestSummary, setRequestSummary] = useState(null);
   const [requestError, setRequestError] = useState("");
   const [collapsedProviders, setCollapsedProviders] = useState({});
+  const preferredModel = useRef('');
+  const modelClient = useRef('');
+  const modelPickerRef = useRef(null);
   const loadId = useRef(0),
     orgId = useRef(0);
   const orgName = organizations.find(item => item.id === org)?.name || "选择组织";
@@ -234,9 +253,10 @@ export default function DesktopApp() {
     installed = clients.filter((c) => c.installed),
     selected = clients.find((c) => c.id === clientId),
     key = keys.find((k) => k.id === activeKey);
+  const visibleKeys = keys.filter(k => (keyTypeFilter === '' || String(k.keyType) === keyTypeFilter) && (k.name + k.masked).toLowerCase().includes(query.toLowerCase()));
   const connected = new Map();
-  for (const h of [...history].reverse()) {
-    if (!h.restored) connected.set(h.client, h);
+  for (const client of clients) {
+    if (client.configuration?.state === 'configured') connected.set(client.id, client.configuration);
   }
   const notify = (text) => {
     setToast(text);
@@ -352,6 +372,7 @@ export default function DesktopApp() {
   useEffect(() => {
     const id = ++orgId.current;
     setKeys([]);
+    setKeyTypeFilter('');
     setWallet(null);
     setRequestKey("");
     setRequestPage(1);
@@ -396,6 +417,12 @@ export default function DesktopApp() {
     return () => { active = false; };
   }, [page, org, requestKey, logged, requestPage, requestPageSize, requestFilters, requestReload]);
   const chooseClient = (id, platformSource = !!activeKey) => {
+    modelClient.current = id;
+    preferredModel.current = connected.get(id)?.model || '';
+    if (id !== clientId) {
+      setModel(selectAvailableModel(models, preferredModel.current));
+      setModelQuery(''); setModelCategory('全部');
+    }
     setClientId(id);
     setPlan(null);
     setTested(false);
@@ -415,9 +442,14 @@ export default function DesktopApp() {
       if (first) chooseClient(first.id);
     }
   }, [detected, modal?.type, clientId]);
-  async function loadModels(id) {
+  useEffect(() => {
+    modelPickerRef.current?.querySelector('button.picked')?.scrollIntoView({ block: 'nearest' });
+  }, [model, modelsLoading, clientId]);
+  async function loadModels(id, preferred = model || preferredModel.current) {
     const current = ++loadId.current;
+    const requestedClient = modelClient.current;
     setTested(false); setPlan(null);
+    setModelQuery('');
     setModels([]);
     setModelCategory("全部");
     setModel("");
@@ -432,7 +464,7 @@ export default function DesktopApp() {
       }
       if (current === loadId.current) {
         setModels(list);
-        setModel((list.find(item => item.isDefault) || list[0])?.id || "");
+        setModel(selectAvailableModel(list, requestedClient === modelClient.current ? preferred : preferredModel.current));
         if (!list.length) setModelError(id ? "此密钥没有可用模型" : "此服务商没有已启用模型，请在模型服务商页面添加或启用模型");
       }
     } catch (e) {
@@ -441,22 +473,24 @@ export default function DesktopApp() {
       if (current === loadId.current) setModelsLoading(false);
     }
   }
-  function selectProvider(value) {
+  function selectProvider(value, preferred = model || preferredModel.current) {
     ++loadId.current;
     setActiveKey(""); setProviderId(value); setModelsLoading(false); setModelError("");
     const list = localModels.filter(item => item.providerId === value && item.enabled);
-    setModels(list); setModel((list.find(item => item.isDefault) || list[0])?.id || "");
+    setModels(list); setModel(selectAvailableModel(list, preferred));
     setProtocol(localProviders.find(item => item.id === value)?.protocol || "openai");
   }
   function openConfig(k, client, provider) {
     if (k?.canConfigure === false) { notify((k.statuses || []).map(s => s.label).join('、') + '，无法配置'); return; }
     ++loadId.current;
-    chooseClient(client?.id || installed.find(c => c.supported)?.id || "", !!k);
+    const targetClient = client?.id || installed.find(c => c.supported)?.id || "";
+    chooseClient(targetClient, !!k);
     setPlan(null); setResult(null); setTested(false); setError(""); setModelQuery(""); setModelCategory("全部"); setModelError(""); setModelsLoading(false);
     setConfigPane("local"); setPreviewPath("");
+    setDshProfile(connected.get(client?.id)?.dshProfile || "web");
     setModal({ type: "configure" });
-    if (k) { setActiveKey(k.id); loadModels(k.id); }
-    else selectProvider(provider?.id || localModels.find(item => item.isDefault && item.enabled)?.providerId || localProviders[0]?.id || "");
+    if (k) { setActiveKey(k.id); loadModels(k.id, preferredModel.current); }
+    else selectProvider(provider?.id || localModels.find(item => item.isDefault && item.enabled)?.providerId || localProviders[0]?.id || "", preferredModel.current);
   }
   function close() {
     ++loadId.current;
@@ -473,11 +507,14 @@ export default function DesktopApp() {
   }
   const selectedModelSettings = activeKey ? {} : localModels.find(item => item.providerId === providerId && item.id === model) || {};
   const modelSettings = { contextWindow: selectedModelSettings.contextWindow || "", maxTokens: selectedModelSettings.maxTokens || "", supportsImages: selectedModelSettings.supportsImages ?? "", supportsTools: selectedModelSettings.supportsTools ?? "", supportsReasoning: selectedModelSettings.supportsReasoning ?? "", ...modelOverrides };
-  const input = () => ({ ...(activeKey ? { keyId: activeKey } : { providerId }), client: clientId, model, protocol, modelSettings });
-  const refreshHistory = async () => setHistory(await invoke("history"));
-  async function restore(entry) {
+  const input = () => ({ ...(activeKey ? { keyId: activeKey } : { providerId }), client: clientId, model, protocol, modelSettings, ...(clientId === "deepseek-harness" ? { dshProfile } : {}) });
+  const refreshHistory = async () => {
+    const [entries, clients] = await Promise.all([invoke('history'), invoke('detect')]);
+    setHistory(entries); setDetected(clients);
+  };
+  async function restore(entry, force = false) {
     const ok = await run("restore", async () => {
-      await invoke("restore", entry.id);
+      await invoke("restore", force ? { id: entry.id, force: true } : entry.id);
       await refreshHistory();
       return true;
     });
@@ -706,9 +743,7 @@ export default function DesktopApp() {
                       update?.error && '查询失败：' + update.error + '；将在后台自动重试',
                       update?.status === 'unknown' && '无法读取当前版本，暂不能可靠判断或执行更新',
                     ].filter(Boolean).join('\n');
-                    const configuredCount = new Set(
-                      history.filter((entry) => entry.client === c.id && !entry.restored).map((entry) => entry.model),
-                    ).size;
+                    const configuredCount = config?.count || 0;
                     return (
                       <div
                         className={
@@ -744,38 +779,37 @@ export default function DesktopApp() {
                         <div className="agent-management agent-update-status" data-update-state={c.installed ? update?.status || 'checking' : 'not-installed'}>
                           {c.installed && update?.status === 'available' && canUpdate
                             ? <button className="text-button update-available" disabled={installation?.running} onClick={() => openInstall(c, true)}>更新至 v{update.latestVersion}<ArrowUpRight size={13} /></button>
+                            : c.installed && management && !canUpdate && ['available', 'unsupported'].includes(update?.status)
+                            ? <button className="text-button update-available" onClick={() => setModal({ type: 'manual-update', client: c, update })}>{update.status === 'available' ? '有新版本 · 需手动更新' : '需手动更新'}<ArrowUpRight size={13} /></button>
                             : <span className="agent-status-summary">
                               {!c.installed ? !management ? '确认安装支持中' : management.installable ? '可一键安装' : '需手动安装'
                                 : !update ? checkingUpdates ? '检测版本中' : '等待检测'
-                                : update.status === 'available' ? '有新版本 · 原渠道更新'
+                                : update.status === 'available' ? '有新版本 · 需手动更新'
                                 : update.status === 'error' ? '版本暂未查到'
                                 : update.status === 'unknown' ? '版本未知'
-                                : update.status === 'unsupported' ? '通过原渠道更新'
+                                : update.status === 'unsupported' ? '需手动更新'
                                 : update.status === 'ahead' ? '高于稳定版' : '已是最新版'}
                             </span>}
                           <AgentDetailsTooltip client={c}>{managementDetails}</AgentDetailsTooltip>
                         </div>
                         <div className="agent-model">
-                          <span>当前模型</span>
-                          <strong title={config?.model}>
-                            {config?.model || "尚未配置"}
+                          <span>{config ? configModelPresentation(config, c.id).label : '模型配置'}</span>
+                          <strong title={config ? configModelPresentation(config, c.id).title : undefined}>
+                            {config ? configModelPresentation(config, c.id).text : c.configuration?.state === 'unreadable' ? '配置暂无法读取' : '未检测到模型配置'}
                           </strong>
                         </div>
                         <div className="agent-tile-footer">
-                          <button className="text-button config-file-link" title={'查看 ' + c.name + ' 本机配置'} aria-label={'查看 ' + c.name + ' 本机配置'} onClick={() => { setError(''); setModal({ type: 'config-files', client: c }); }}><FileCode2 size={14} />本机配置</button>
-                          {c.installed && <button className="icon-button" title={'卸载 ' + c.name} onClick={() => openUninstall(c)}><Trash2 size={13} /></button>}
-                          <span title={c.evidence}>
-                            {c.bundle || ["vscode", "zed", "zcode", "workbuddy", "claude-desktop"].includes(c.id) && c.installed
-                              ? "桌面应用"
-                              : c.executable ? "终端客户端" : "未发现客户端"}
-                          </span>
+                          {c.installed && <button className="text-button agent-launch-button" aria-label={'运行 ' + c.name} title={c.bundle || ['claude-desktop', 'deepseek-harness-desktop', 'vscode', 'zed', 'zcode', 'workbuddy'].includes(c.id) ? '打开或切换到 ' + c.name : '在系统终端启动 ' + c.name} disabled={!!busy || installing} onClick={() => run('launch-' + c.id, async () => { const result = await invoke('launchAgent', c.id); notify(result.message); })}>
+                            {busy === 'launch-' + c.id ? <LoaderCircle size={12} className="spin" /> : <Play size={12} />}运行
+                          </button>}
+                          <AgentCardMenu client={c} disabled={!!busy || installing} onInspect={() => { setError(''); setModal({ type: 'config-files', client: c }); }} onUninstall={() => openUninstall(c)} />
                           <button
-                            className="text-button"
+                            className="text-button agent-config-button"
                             disabled={c.installed && !c.supported}
                             title={c.reason || undefined}
                             onClick={() => installing ? openInstall(c, installation.operation === 'update') : c.installed ? openConfig(keys[0], c) : openInstall(c)}
                           >
-                            {installing ? "查看进度" : c.installed ? (!c.supported ? "暂不支持自动配置" : (config ? "管理配置" : "配置")) : (management?.installable ? "一键安装" : "安装说明")}
+                            {installing ? "查看进度" : c.installed ? (!c.supported ? "暂不支持" : "配置") : (management?.installable ? "一键安装" : "安装说明")}
                             {installing ? <LoaderCircle size={14} className="spin" /> : c.installed ? <ArrowRight size={14} /> : <Download size={14} />}
                           </button>
                         </div>
@@ -846,20 +880,23 @@ export default function DesktopApp() {
               {wallet && <section className="key-wallet-summary" aria-label="账户可用预算">
                 <div className="key-wallet-heading">
                   <span>账户可用总预算</span>
-                  <strong>{wallet.unlimited ? "不限额" : wallet.available != null ? `¥${Number(wallet.available).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}` : "未返回"}</strong>
+                  <strong>{wallet.unlimited ? "不限额" : wallet.available != null ? `${org === 'personal' ? '¥' : ''}${Number(wallet.available).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}${org === 'personal' ? '' : ' 积分'}` : "未返回"}</strong>
                 </div>
                 <div className="key-wallet-meta">
-                  <span>{wallet.unlimited ? "当前账户不设预算上限" : `预算上限 ${wallet.limit != null ? `¥${Number(wallet.limit).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}` : "未返回"}`}</span>
-                  <span>已用 {wallet.used != null ? `¥${Number(wallet.used).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}` : "未返回"}</span>
-                  {wallet.organizationBalance != null && <span>账户余额 ¥{Number(wallet.organizationBalance).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}</span>}
+                  <span>{wallet.unlimited ? "当前账户不设预算上限" : `预算上限 ${wallet.limit != null ? `${org === 'personal' ? '¥' : ''}${Number(wallet.limit).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}${org === 'personal' ? '' : ' 积分'}` : "未返回"}`}</span>
+                  <span>已用 {wallet.used != null ? `${org === 'personal' ? '¥' : ''}${Number(wallet.used).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}${org === 'personal' ? '' : ' 积分'}` : "未返回"}</span>
+                  {wallet.organizationBalance != null && <span>账户余额 {org === 'personal' ? '¥' : ''}{Number(wallet.organizationBalance).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}{org === 'personal' ? '' : ' 积分'}</span>}
                 </div>
                 {wallet.percent != null && <progress aria-label="账户预算使用比例" max="100" value={wallet.percent} />}
               </section>}
               <div className="section-toolbar">
                 <span className="table-count">
-                  全部密钥 <span>{keys.length}</span>
+                  全部密钥 <span>{visibleKeys.length} / {keys.length}</span>
                 </span>
                 <div className="key-toolbar-actions">
+                <select className="key-type-filter" aria-label="密钥类型" value={keyTypeFilter} onChange={e => setKeyTypeFilter(e.target.value)}>
+                  <option value="">全部类型</option><option value="0">个人密钥</option><option value="1">组织密钥</option>
+                </select>
                 <label className="search">
                   <Search size={15} />
                   <input
@@ -892,6 +929,7 @@ export default function DesktopApp() {
                   <thead>
                     <tr>
                       <th>密钥名称</th>
+                      <th>类型</th>
                       <th>API Key</th>
                       <th>状态</th>
                       <th>预算 / 用量</th>
@@ -902,12 +940,7 @@ export default function DesktopApp() {
                     </tr>
                   </thead>
                   <tbody>
-                    {keys
-                      .filter((k) =>
-                        (k.name + k.masked)
-                          .toLowerCase()
-                          .includes(query.toLowerCase()),
-                      )
+                    {visibleKeys
                       .map((k) => (
                         <tr key={k.id}>
                           <td>
@@ -918,13 +951,14 @@ export default function DesktopApp() {
                               <strong>{k.name}</strong>
                             </span>
                           </td>
+                          <td><span className="key-state muted" title={k.keyType === 1 ? '费用由组织账户承担' : k.keyType === 0 && org !== 'personal' ? '调用消耗当前成员的预算' : '个人使用'}>{keyTypeLabel(k)}</span></td>
                           <td>
                             <code>{k.masked}</code>
                           </td>
                           <td><div className="key-statuses">{(k.statuses || [{ label: '状态未知', tone: 'muted' }]).map(s => <span key={s.label} className={'key-state ' + s.tone}>{s.label}</span>)}</div></td>
                           <td><div className="key-budget">
-                            <strong>{k.budget?.unlimited ? '不限额' : k.budget?.limit != null ? `¥${Number(k.budget.limit).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}${k.budget.period ? ' / ' + k.budget.period : ''}` : '预算未返回'}</strong>
-                            <small>已用 {k.budget?.used != null ? `¥${Number(k.budget.used).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}` : '未返回'}{k.budget?.remaining != null ? ` · 剩余 ¥${Number(k.budget.remaining).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}` : ''}</small>
+                            <strong>{k.budget?.unlimited ? '不限额' : k.budget?.limit != null ? `${org === 'personal' ? '¥' : ''}${Number(k.budget.limit).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}${org === 'personal' ? '' : ' 积分'}${k.budget.period ? ' / ' + k.budget.period : ''}` : '预算未返回'}</strong>
+                            <small>已用 {k.budget?.used != null ? `${org === 'personal' ? '¥' : ''}${Number(k.budget.used).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}${org === 'personal' ? '' : ' 积分'}` : '未返回'}{k.budget?.remaining != null ? ` · 剩余 ${org === 'personal' ? '¥' : ''}${Number(k.budget.remaining).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}${org === 'personal' ? '' : ' 积分'}` : ''}</small>
                             {k.budget?.percent != null && <progress aria-label={k.name + '预算使用比例'} max="100" value={k.budget.percent} />}
                           </div></td>
                           <td><time>{k.expiresAt === 'permanent' ? '永久有效' : k.expiresAt ? time(k.expiresAt) : '未返回'}</time></td>
@@ -961,11 +995,7 @@ export default function DesktopApp() {
                     <p>当前组织暂无密钥，请在 OneLinkAI 平台创建后刷新。</p>
                   </div>
                 ) : (
-                  !keys.some((k) =>
-                    (k.name + k.masked)
-                      .toLowerCase()
-                      .includes(query.toLowerCase()),
-                  ) && <div className="empty">没有匹配的密钥</div>
+                  !visibleKeys.length && <div className="empty">没有匹配的密钥</div>
                 )}
                 <div className="table-footer">
                   <ShieldCheck size={13} />
@@ -1092,10 +1122,11 @@ export default function DesktopApp() {
                     <option value="">全部 API Keys</option>
                     {keys.map((k) => (
                       <option key={k.id} value={k.id}>
-                        {k.name}
+                        {k.name} · {keyTypeLabel(k)}
                       </option>
                     ))}
                   </select>
+                  {requestOptions.users?.length > 0 && <select aria-label="筛选请求用户" value={requestDraft.userId} onChange={e => setRequestDraft(value => ({ ...value, userId: e.target.value }))}><option value="">全部用户</option>{requestOptions.users.map(user => <option key={user.value} value={user.value}>{user.label}</option>)}</select>}
                   {[["modelId", "全部模型", requestOptions.models], ["supplierId", "全部模型服务商", requestOptions.suppliers], ["modelTypes", "全部模型类型", requestOptions.types]].map(([field, label, options]) => (
                     <select key={field} aria-label={label} value={requestDraft[field]} onChange={e => setRequestDraft(value => ({ ...value, [field]: e.target.value }))}>
                       <option value="">{label}</option>
@@ -1131,7 +1162,11 @@ export default function DesktopApp() {
                       <th>Tokens</th>
                       <th>缓存命中</th>
                       <th>费用</th>
-                      <th>吞吐量</th>
+                      <th>生成速度</th>
+                      <th>首字延迟</th>
+                      <th>端到端耗时</th>
+                      <th>结束原因</th>
+                      <th>日志模式</th>
                       <th>状态</th>
                       <th>操作</th>
                     </tr>
@@ -1151,6 +1186,10 @@ export default function DesktopApp() {
                         <td>{r.fields?.tokenCacheHit ?? "—"}</td>
                         <td>{r.cost}</td>
                         <td>{r.fields?.throughput != null ? r.fields.throughput + " tps" : "—"}</td>
+                        <td>{r.fields?.firstLatency != null ? r.fields.firstLatency + ' ms' : '—'}</td>
+                        <td>{r.fields?.totalLatency != null ? r.fields.totalLatency + ' ms' : '—'}</td>
+                        <td>{requestValue('endReason', r.fields?.endReason)}</td>
+                        <td>{requestValue('dataRetentionSwitch', r.fields?.dataRetentionSwitch)}</td>
                         <td><span className="request-status" title={requestValue("responseStatus", r.status)}>{requestValue("responseStatus", r.status)}</span></td>
                         <td><button className="text-button" onClick={() => openRequest(r)}>详情<ArrowRight size={13} /></button></td>
                       </tr>
@@ -1229,11 +1268,23 @@ export default function DesktopApp() {
             )}
             {modal.type === 'import-models' && <ModelImportDialog provider={modal.provider} onClose={close} onConfirm={selection => run('select-models', async () => { await invoke('selectLocalModels', { providerId: modal.provider.id, models: selection }); await refreshLocal(); close(); notify('模型选择已更新'); })} busy={!!busy} />}
             {modal.type === 'config-files' && <ClientConfigViewer client={modal.client} />}
+            {modal.type === 'manual-update' && <>
+              <div className="modal-eyebrow"><RefreshCw size={14} />手动更新</div>
+              <h2>更新 {modal.client.name}</h2>
+              <p>当前版本：{modal.client.version || '未读取'}{modal.update?.latestVersion ? ` · 最新版本：${modal.update.latestVersion}` : ''}</p>
+              <div className="notice">{modal.client.management?.reason || '当前安装不支持在 OneLinkAI 中一键更新，请通过客户端内置更新或原安装渠道更新。'}</div>
+              <p>打开客户端，在应用菜单或设置中检查更新；也可从官方下载并按原安装方式更新。</p>
+              <div className="modal-actions">
+                <button className="button primary" disabled={!!busy} onClick={() => run('launch-update', async () => { const result = await invoke('launchAgent', modal.client.id); notify(result.message); })}>打开客户端<ExternalLink size={14} /></button>
+                {modal.client.management?.guide && <a className="button" href={modal.client.management.guide} target="_blank" rel="noreferrer">官方下载<ExternalLink size={14} /></a>}
+              </div>
+            </>}
             {modal.type === "request" && (
               <>
                 <div className="modal-eyebrow"><Activity size={14} />调用日志</div>
                 <h2>请求详情</h2>
                 {busy === "request-detail" && <div className="notice"><LoaderCircle size={14} className="spin" />正在获取完整日志…</div>}
+                {Number(logDetail?.dataRetentionSwitch) === 1 && <div className="notice">此请求启用了隐私模式，平台不保留请求和响应正文。</div>}
                 <dl className="request-details">
                   {requestFields.map(([field, label]) => <div key={field}><dt>{label}</dt><dd>{requestValue(field, logDetail?.[field])}</dd></div>)}
                 </dl>
@@ -1299,26 +1350,45 @@ export default function DesktopApp() {
             )}
             {modal.type === "restore" && (
               <>
-                <h2>恢复原始配置？</h2>
-                <p>
-                  恢复 {catalog.find((c) => c.id === modal.entry.client)?.name}{" "}
-                  配置前的文件。发现后续修改时会停止恢复。
-                </p>
-                <div className="modal-footer">
-                  <button className="button" disabled={!!busy} onClick={close}>
-                    取消
-                  </button>
-                  <button
-                    className="button primary"
-                    disabled={!!busy}
-                    onClick={() => restore(modal.entry)}
-                  >
-                    <RotateCcw size={14} />
-                    确认恢复
+                <h2>{modal.force ? "强制恢复原始配置？" : "恢复原始配置？"}</h2>
+                <p>恢复 {catalog.find(c => c.id === modal.entry.client)?.name} 配置前的文件。{modal.force ? "将覆盖后续修改，恢复前会自动备份当前文件及相关凭据。原先不存在的配置文件将被删除。" : "发现后续修改时会停止恢复，也可以选择强制恢复或手动修改。"}</p>
+                {modal.force && <div className="notice warning">请确认当前修改可以被覆盖。原始备份缺失时仍会停止恢复。</div>}
+                <div className="modal-footer restore-actions">
+                  <button className="button" disabled={!!busy} onClick={modal.force ? () => { setError(""); setModal({ ...modal, force: false }); } : close}>{modal.force ? "返回" : "取消"}</button>
+                  {!modal.force && <>
+                    <button className="button" disabled={!!busy} onClick={() => run("restore-files", async () => {
+                      const files = await invoke("restoreFiles", modal.entry.id);
+                      setModal({ type: "manual-restore", entry: modal.entry, files });
+                    })}><Pencil size={14} />手动修改</button>
+                    <button className="button danger" disabled={!!busy} onClick={() => { setError(""); setModal({ ...modal, force: true }); }}>强制恢复</button>
+                  </>}
+                  <button className={"button " + (modal.force ? "danger" : "primary")} disabled={!!busy} onClick={() => restore(modal.entry, modal.force === true)}>
+                    {busy === "restore" ? <LoaderCircle size={14} className="spin" /> : <RotateCcw size={14} />}
+                    {busy === "restore" ? "正在恢复…" : modal.force ? "确认强制恢复" : "确认恢复"}
                   </button>
                 </div>
               </>
             )}
+            {modal.type === "manual-restore" && <>
+              <h2>手动修改配置</h2>
+              <p>打开文件位置后，用本机编辑器对照原始备份修改当前文件。备份以 .bak 保存，请保留原始备份。</p>
+              {modal.entry.credential && <div className="notice warning">此备份还包含 Zed 系统凭据。手动修改文件不会恢复系统凭据，请在 Zed 中单独处理，或返回选择恢复。</div>}
+              <div className="manual-restore-files">
+                {modal.files.map(file => <section key={file.index}>
+                  <code>{file.path}</code>
+                  <div className="restore-file-actions">
+                    <button className="button" disabled={!!busy || !file.exists} onClick={() => run("reveal-restore-file", () => invoke("revealRestoreFile", { id: modal.entry.id, index: file.index }))}>{file.exists ? "打开当前文件位置" : "当前文件不存在"}</button>
+                    {file.backupPath && <button className="button" disabled={!!busy} onClick={() => run("reveal-restore-file", () => invoke("revealRestoreFile", { id: modal.entry.id, index: file.index, backup: true }))}>打开原始备份位置</button>}
+                  </div>
+                  {file.backupPath ? <small>原始备份：{file.backupPath}</small> : <small>配置前不存在此文件；完全恢复原状需删除当前文件。</small>}
+                </section>)}
+              </div>
+              <p>手动修改后，请在客户端确认配置。此操作不会自动标记备份为已恢复。</p>
+              <div className="modal-footer">
+                <button className="button" disabled={!!busy} onClick={() => { setError(""); setModal({ type: "restore", entry: modal.entry }); }}>返回</button>
+                <button className="button primary" disabled={!!busy} onClick={close}>完成</button>
+              </div>
+            </>}
             {modal.type === "configure" && (
               <>
                 <h2>
@@ -1337,7 +1407,7 @@ export default function DesktopApp() {
                       <button
                         className="button"
                         disabled={!!busy}
-                        onClick={() => restore(result)}
+                        onClick={() => { setError(""); setModal({ type: "restore", entry: result }); }}
                       >
                         <RotateCcw size={14} />
                         恢复本次配置
@@ -1359,7 +1429,7 @@ export default function DesktopApp() {
                     <div className="config-key-select">
                       <KeyRound size={15} />
                       <select aria-label="配置来源" value={activeKey ? `key:${activeKey}` : `provider:${providerId}`} onChange={(e) => {
-                        const [kind, value] = e.target.value.split(":"); setTested(false); setPlan(null);
+                        const { kind, id: value } = parseConfigSource(e.target.value); setTested(false); setPlan(null);
                         if (kind === "key") { setActiveKey(value); chooseClient(clientId, true); loadModels(value); }
                         else selectProvider(value);
                       }}>
@@ -1441,7 +1511,7 @@ export default function DesktopApp() {
                         </button>)}
                       </div>
                     )}
-                    <div className="model-picker">
+                    <div className="model-picker" ref={modelPickerRef}>
                       {modelsLoading ? (
                         <div className="model-loading">
                           <LoaderCircle size={19} className="spin" />
@@ -1490,7 +1560,10 @@ export default function DesktopApp() {
                           ))
                       )}
                     </div>
+                    {!modelsLoading && !modelError && preferredModel.current && models.length > 0 && !models.some(item => item.id === preferredModel.current) && <small className="settings-help">当前模型 {preferredModel.current} 不在此来源的可用列表中，请选择可用模型。</small>}
                     {!modelsLoading && !modelError && models.length > 0 && !filteredModels.length && <div className="inline-empty">该分类下没有匹配的模型</div>}
+                    {clientId === "deepseek-harness" && <label>CLI Profile<input aria-label="DSH CLI Profile" value={dshProfile} placeholder="web" onChange={e => setDshProfile(e.target.value)} /><small>WebUI 使用 web；自定义 profile 请填写启动时的名称。使用 dsh --profile {dshProfile || "web"} 启动。</small></label>}
+                    {clientId === "deepseek-harness-desktop" && <div className="notice">配置目标：桌面版 desktop profile。配置后完全退出并重启 DeepSeek Harness Desktop。</div>}
                     <div className="protocol-row">
                       <label htmlFor="protocol">接口协议</label>
                       <select

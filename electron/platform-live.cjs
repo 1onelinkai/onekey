@@ -125,6 +125,7 @@ function createLivePlatform({ fetcher = fetch, sessionStore } = {}) {
       const secret = fullSecret(record.apiKeyPlain) || fullSecret(record.apiKey);
       keys.set(id, { org: orgId, recordId: record.id, record });
       return { id, org: orgId, name: record.keyName || '未命名密钥', masked: secret ? secret.slice(0, 3) + '••••••••' + secret.slice(-4) : record.apiKey || '不可读取',
+        keyType: orgId === 'personal' ? 0 : record.keyType === 0 || record.keyType === 1 || record.keyType === '0' || record.keyType === '1' ? Number(record.keyType) : null,
         baseURL: API, createdAt: record.createTime || record.createdAt, status: record.status,
         ...keyMetadata(record),
         source: 'platform', hasSecret: !!secret };
@@ -196,19 +197,20 @@ function createLivePlatform({ fetcher = fetch, sessionStore } = {}) {
   }
   async function requestOptions({ org } = {}) {
     const args = await scope(org);
-    const query = new URLSearchParams({ userId: String(args.userId), ...(args.tenantId ? { tenantId: String(args.tenantId) } : {}) });
-    const [suppliers, models, types] = await Promise.all([
+    const query = new URLSearchParams({ ...(!args.isAdmin ? { userId: String(args.userId) } : {}), ...(args.tenantId ? { tenantId: String(args.tenantId) } : {}) });
+    const [suppliers, models, types, users] = await Promise.all([
       call('/log/user/call/supplierList?' + query, { method: 'GET' }),
       call('/log/user/call/modelList?' + query, { method: 'GET' }),
       call('/user/user/dictionary/dict/model_type', { method: 'GET' }),
+      args.tenantId && args.isAdmin ? call('/log/user/call/tenantConsumptionUsers?' + query, { method: 'GET' }) : [],
     ]);
     const options = (data, id, label) => {
       if (!Array.isArray(data)) throw new Error('请求筛选列表格式异常');
       return data.filter(item => item[id] != null).map(item => ({ value: String(item[id]), label: String(item[label] || item[id]) }));
     };
-    return { suppliers: options(suppliers, 'supplierId', 'supplierName'), models: options(models, 'modelId', 'modelName'), types: options(types, 'itemValue', 'itemName') };
+    return { suppliers: options(suppliers, 'supplierId', 'supplierName'), models: options(models, 'modelId', 'modelName'), types: options(types, 'itemValue', 'itemName'), users: [...new Map(options(users, 'userId', 'userName').map(item => [item.value, item])).values()] };
   }
-  async function requests({ org, keyId, page = 1, pageSize = 50, modelId = '', supplierId = '', modelTypes = '', startTime = '', endTime = '' } = {}) {
+  async function requests({ org, keyId, userId = '', page = 1, pageSize = 50, modelId = '', supplierId = '', modelTypes = '', startTime = '', endTime = '' } = {}) {
     const args = await scope(org);
     if (keyId && (!keys.has(keyId) || keys.get(keyId).org !== org)) throw new Error('密钥不属于当前组织，请刷新');
     page = Math.max(1, Math.floor(Number(page) || 1));
@@ -216,7 +218,9 @@ function createLivePlatform({ fetcher = fetch, sessionStore } = {}) {
     const filterIds = value => typeof value === 'string' ? [...new Set(value.split(',').map(id => id.trim()).filter(Boolean))].slice(0, 50) : [];
     const validTime = value => !value || /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) && Number.isFinite(Date.parse(value.replace(' ', 'T')));
     if (!validTime(startTime) || !validTime(endTime) || startTime && endTime && startTime > endTime) throw new Error('请求时间范围无效');
-    const data = await call('/log/user/call/list', { body: { ...args, pageNum: page, pageSize, startTime: startTime || null, endTime: endTime || null, modelId: filterIds(modelId), supplierId: filterIds(supplierId), apiKey: keyId ? [keys.get(keyId).recordId] : [], modelTypes: filterIds(modelTypes) } });
+    if (userId && (!args.isAdmin || !/^\d+$/.test(String(userId)))) throw new Error('无权筛选该用户');
+    const { tenantId } = args;
+    const data = await call('/log/user/call/list', { body: { ...(tenantId ? { tenantId } : {}), ...(!args.isAdmin ? { userId: args.userId } : userId ? { userId } : {}), pageNum: page, pageSize, startTime: startTime || null, endTime: endTime || null, modelId: filterIds(modelId), supplierId: filterIds(supplierId), apiKey: keyId ? [keys.get(keyId).recordId] : [], modelTypes: filterIds(modelTypes) } });
     if (!Array.isArray(data?.records)) throw new Error('请求记录格式异常');
     return { connected: true, total: data.total, page, pageSize, items: data.records.map(record => ({
       id: record.id,
@@ -227,7 +231,7 @@ function createLivePlatform({ fetcher = fetch, sessionStore } = {}) {
         ? `输入 ${record.tokenInput ?? '—'} / 输出 ${record.tokenOutput ?? '—'}`
         : record.totalTokens ?? record.tokens ?? '—',
       cost: record.sell ?? record.fee ?? record.cost ?? '—',
-      status: record.responseStatus ?? record.status ?? '—',
+      status: record.callType === 'async' && record.taskStatus === 'processing' ? 'processing' : record.responseStatus ?? record.status ?? '—',
       fields: logFields(record),
     })) };
   }

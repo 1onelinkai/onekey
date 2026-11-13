@@ -25,6 +25,7 @@ const ids = [
   "pi",
   "minimax",
   "deepseek-harness",
+  "deepseek-harness-desktop",
   "zed",
   "vscode",
   "zcode",
@@ -126,6 +127,8 @@ function createAgentService({
   env = process.env,
   command = exec,
   credentials,
+  readWorkbuddySelection,
+  readClientSelection,
   applicationDirs = ["/Applications", path.join(home, "Applications")],
 } = {}) {
   const config = env.XDG_CONFIG_HOME || path.join(home, ".config");
@@ -155,6 +158,7 @@ function createAgentService({
     pi: env.PI_CODING_AGENT_DIR || path.join(home, ".pi/agent"),
     minimax: env.MINIMAX_DATA_DIR || path.join(home, ".minimax"),
     "deepseek-harness": env.DSH_HOME || path.join(home, ".dsh"),
+    "deepseek-harness-desktop": env.DSH_HOME || path.join(home, ".dsh"),
     zed: path.join(
       platform === "win32"
         ? env.APPDATA || path.join(home, "AppData/Roaming")
@@ -186,6 +190,7 @@ function createAgentService({
     pi: ["pi"],
     minimax: ["mcode", "minimax", "minimax-code"],
     "deepseek-harness": ["dsh", "deepseek-harness"],
+    "deepseek-harness-desktop": [],
     zed: ["zed", "zeditor"],
     vscode: ["code"],
     zcode: ["zcode"],
@@ -193,7 +198,7 @@ function createAgentService({
     hermes: ["hermes"],
   };
   const bundles = {
-    "deepseek-harness": "DeepSeek Harness.app",
+    "deepseek-harness-desktop": "DeepSeek Harness.app",
     "claude-desktop": "Claude.app",
     zed: "Zed.app",
     vscode: "Visual Studio Code.app",
@@ -206,7 +211,12 @@ function createAgentService({
   const journalPath = path.join(dataDir, "history.json");
   async function history() {
     const value = await read(journalPath);
-    return value ? JSON.parse(value) : [];
+    const entries = value ? JSON.parse(value) : [];
+    // Older adapters wrote desktop patches under the combined client id.
+    // Normalize on read so restore ids, backup locations and hashes stay intact.
+    return entries.map(entry => entry.client === "deepseek-harness" &&
+      entry.files?.some(file => /[/\\]profiles[/\\]desktop[/\\]cordis\.patch\.yml$/.test(file.path))
+      ? { ...entry, client: "deepseek-harness-desktop", dshProfile: "desktop" } : entry);
   }
   async function serialize(fn) {
     if (locked) throw new Error("另一项配置或恢复正在进行，请稍后重试");
@@ -328,6 +338,17 @@ function createAgentService({
           () => false,
         );
         const installed = !!(executable || bundle);
+        const configuration = require('./config-summary.cjs').configSummary(await configInspector.inspect(id));
+        if (installed && (readClientSelection || (id === 'workbuddy' && readWorkbuddySelection))) {
+          try {
+            const selection = readClientSelection ? await readClientSelection(id, dirs[id]) : await readWorkbuddySelection();
+            if (selection?.model) {
+              const models = [...new Set([...configuration.models, selection.model])];
+              Object.assign(configuration, selection, { state: 'configured', models, count: models.length });
+              delete configuration.selectionStatus;
+            } else if (selection?.selectionStatus && !configuration.model) configuration.selectionStatus = selection.selectionStatus;
+          } catch { /* Keep the registry usable when the selected preference cannot be read. */ }
+        }
         return {
           id,
           installed,
@@ -335,6 +356,7 @@ function createAgentService({
           executable,
           bundle,
           configExists,
+          configuration,
           path: dirs[id],
           evidence:
             executable ||
@@ -657,9 +679,15 @@ function createAgentService({
         doc.set("defaultModel", "custom_provider:onelinkai/" + model);
         return doc.toString();
       });
-    if (client === "deepseek-harness") {
+    if (["deepseek-harness", "deepseek-harness-desktop"].includes(client)) {
       // DSH 0.2 uses Cordis entry patches and credential references, never DSH_* dotenv keys.
-      const patchFile = "profiles/desktop/cordis.patch.yml";
+      const profile = client === "deepseek-harness-desktop" ? "desktop" : input.dshProfile ?? "web";
+      if (typeof profile !== "string" || !/^[a-zA-Z0-9][\w-]{0,63}$/.test(profile) ||
+          (client === "deepseek-harness" && profile.toLowerCase() === "desktop"))
+        throw new Error("DSH CLI profile 无效；请填写 web、headless 或其他自定义名称，desktop 仅供桌面版使用");
+      input.dshProfile = profile;
+      const credentialRef = client === "deepseek-harness-desktop" ? "ONELINKAI_API_KEY" : "ONELINKAI_CLI_" + Buffer.from(profile).toString("hex").toUpperCase() + "_API_KEY";
+      const patchFile = `profiles/${profile}/cordis.patch.yml`;
       await add(patchFile, (text) => {
         const doc = YAML.parseDocument(text ?? "[]");
         if (doc.errors.length || !YAML.isSeq(doc.contents))
@@ -668,7 +696,7 @@ function createAgentService({
         const providerIndex = patches.findLastIndex(item => item?.id === "llm-pi-ai");
         const oldConfig = providerIndex < 0 ? {} : patches[providerIndex].config || {};
         const route = {
-          displayName: "OneLinkAI", apiKeyEnv: "ONELINKAI_API_KEY",
+          displayName: "OneLinkAI", apiKeyEnv: credentialRef,
           api: protocol === "anthropic" ? "anthropic-messages" : protocol === "responses" ? "openai-responses" : "openai-completions",
           baseURL: baseURL + (protocol === "anthropic" ? "" : "/v1"),
           models: [{ id: model, name: modelName, ...modelTraits }],
@@ -686,14 +714,14 @@ function createAgentService({
         const doc = YAML.parseDocument(text ?? "version: 1\nrefs: {}\n");
         if (doc.errors.length || !YAML.isMap(doc.contents) || doc.get("version") !== 1)
           throw new Error("DeepSeek Harness 凭据文件格式无效，未修改");
-        doc.setIn(["refs", "ONELINKAI_API_KEY"], apiKey);
+        doc.setIn(["refs", credentialRef], apiKey);
         return doc.toString();
       });
       // Migrate only the four names emitted by the old OneLinkAI adapter.
-      const envText = await read(path.join(dir, ".env"));
+      const envText = client === "deepseek-harness-desktop" ? await read(path.join(dir, ".env")) : null;
       if (envText !== null && /^\s*(?:export\s+)?DSH_(?:PROVIDER|MODEL|BASE_URL|API_KEY)\s*=/m.test(envText))
         await add(".env", text => text.split(/(?<=\n)/).filter(line => !/^\s*(?:export\s+)?DSH_(?:PROVIDER|MODEL|BASE_URL|API_KEY)\s*=/.test(line)).join(""));
-      const legacyText = await read(path.join(dir, "config.yaml"));
+      const legacyText = client === "deepseek-harness-desktop" ? await read(path.join(dir, "config.yaml")) : null;
       if (legacyText?.includes("onelinkai-model")) {
         const doc = YAML.parseDocument(legacyText);
         if (doc.errors.length || !YAML.isSeq(doc.contents)) throw new Error("旧版 DSH 配置无效，未修改");
@@ -812,7 +840,7 @@ function createAgentService({
       ignored: ignored.filter(label => label !== "模型显示名称" || input.modelSettings?.name !== model),
       files,
       credential,
-      notice: client === "zed" && !credentials ? "模型定义已写入，请在 Zed 的模型设置中为 OneLinkAI 手动填写 API Key。本应用不访问系统钥匙串。" : client === "vscode" ? "模型定义已生成，密钥尚未写入。请在 VS Code 的管理模型中打开 OneLinkAI / Custom Endpoint，填写 API Key 并保存到 VS Code 密钥存储，再选择模型。此配置写入默认用户配置，其他 VS Code Profile 需单独设置。" : client === "gemini" ? "已配置 Google Gemini 原生协议；重启终端后开启新会话。项目 .env 或已导出的环境变量可能覆盖全局凭据，请在 Gemini 内确认。" : client === "claude-desktop" ? "已生成 Claude Desktop 第三方网关 profile，请完全退出并重启 Claude Desktop 后选择 OneLinkAI。直连使用 Anthropic Messages 与 Claude 角色模型。" : client === "grok" ? "已选择 OneLinkAI Responses 模型，请重启 Grok Build 或开启新会话。" : client === "deepseek-harness" ? "已配置 DSH desktop profile；CLI 使用其他 profile 时需单独配置。配置写入校验不代表模型请求成功。" : ["workbuddy", "zcode"].includes(client)
+      notice: client === "zed" && !credentials ? "模型定义已写入，请在 Zed 的模型设置中为 OneLinkAI 手动填写 API Key。本应用不访问系统钥匙串。" : client === "vscode" ? "模型定义已生成，密钥尚未写入。请在 VS Code 的管理模型中打开 OneLinkAI / Custom Endpoint，填写 API Key 并保存到 VS Code 密钥存储，再选择模型。此配置写入默认用户配置，其他 VS Code Profile 需单独设置。" : client === "gemini" ? "已配置 Google Gemini 原生协议；重启终端后开启新会话。项目 .env 或已导出的环境变量可能覆盖全局凭据，请在 Gemini 内确认。" : client === "claude-desktop" ? "已生成 Claude Desktop 第三方网关 profile，请完全退出并重启 Claude Desktop 后选择 OneLinkAI。直连使用 Anthropic Messages 与 Claude 角色模型。" : client === "grok" ? "已选择 OneLinkAI Responses 模型，请重启 Grok Build 或开启新会话。" : ["deepseek-harness", "deepseek-harness-desktop"].includes(client) ? `已配置 DSH ${client === "deepseek-harness" ? "CLI" : "桌面版"} 的 ${input.dshProfile} profile；${client === "deepseek-harness" ? `使用 dsh --profile ${input.dshProfile} 启动，` : "完全退出并重启桌面版，"}配置写入校验不代表模型请求成功。` : ["workbuddy", "zcode"].includes(client)
         ? "配置后重启客户端，在模型列表中选择 OneLinkAI 模型。"
         : "配置后请重启客户端或开启新会话；已运行会话可能继续使用旧配置。",
     };
@@ -826,8 +854,8 @@ function createAgentService({
       files: plan.files.map((f) => ({
         path: f.path,
         existed: f.before !== null,
-        content: plan.input.client === "deepseek-harness" && f.path.endsWith(".credentials.yaml")
-          ? "version: 1\nrefs:\n  ONELINKAI_API_KEY: <API_KEY>\n# 已有凭据保留，预览隐藏全部凭据内容\n"
+        content: ["deepseek-harness", "deepseek-harness-desktop"].includes(plan.input.client) && f.path.endsWith(".credentials.yaml")
+          ? "# DSH 凭据文件：本次 API Key 与已有凭据均已隐藏\n"
           : plan.input.client === "gemini" && f.path.endsWith(".env") ? "# Gemini 环境凭据文件：预览隐藏全部内容\n# 将更新 GEMINI_API_KEY 和 GOOGLE_GEMINI_BASE_URL，其他环境变量保留\n" : redact(f.after),
       })),
       credential: plan.credential
@@ -890,6 +918,7 @@ function createAgentService({
         const entry = {
           id,
           client: plan.input.client,
+          ...(plan.input.dshProfile ? { dshProfile: plan.input.dshProfile } : {}),
           model: plan.input.model,
       requiresManualCredential: plan.input.client === "vscode" || (plan.input.client === "zed" && !plan.credential),
           time: new Date().toISOString(),
@@ -930,7 +959,7 @@ function createAgentService({
       }
     });
   }
-  async function restore(id) {
+  async function restore(id, { force = false } = {}) {
     return serialize(async () => {
       const entries = await history();
       const entry = entries.find((e) => e.id === id);
@@ -939,7 +968,7 @@ function createAgentService({
       const files = [];
       for (const file of entry.files) {
         const current = await read(file.path);
-        if (hash(current) !== file.hash)
+        if (!force && hash(current) !== file.hash)
           throw new Error(
             "配置在写入后已变化，为避免覆盖请手动处理：" + file.path,
           );
@@ -954,40 +983,76 @@ function createAgentService({
           throw new Error("备份文件缺失，无法恢复");
       }
       let credential;
+      let currentCredential;
       if (entry.credential) {
         credential = JSON.parse(
           credentials.decrypt(
             await fs.readFile(path.join(backupDir, "credential.enc")),
           ),
         );
-        if ((await credentials.get(credential.url)) !== credential.after)
+        currentCredential = await credentials.get(credential.url);
+        if (!force && currentCredential !== credential.after)
           throw new Error("Zed 凭据已变化，无法自动恢复");
       }
+      // Preserve the exact state being overwritten before any destructive operation.
+      let recoveryDir;
+      if (force) {
+        recoveryDir = path.join(backupDir, "before-force-" + crypto.randomUUID());
+        await fs.mkdir(recoveryDir, { recursive: true, mode: 0o700 });
+        for (const file of files)
+          if (file.current !== null)
+            await atomic(path.join(recoveryDir, file.index + ".bak"), file.current);
+        if (credential)
+          await atomic(path.join(recoveryDir, "credential.enc"), credentials.encrypt(
+            JSON.stringify({ url: credential.url, before: currentCredential }),
+          ));
+        await atomic(path.join(recoveryDir, "manifest.json"), json({
+          time: new Date().toISOString(),
+          files: files.map(file => ({ path: file.path, index: file.index, existed: file.current !== null })),
+          credential: !!credential,
+        }));
+      }
       const changed = [];
+      let credentialChanged = false;
       try {
         for (const file of files) {
-          if (file.backup === null) await fs.rm(file.path);
+          if (file.backup === null) await fs.rm(file.path, { force: true });
           else await atomic(file.path, file.backup);
           changed.push(file);
         }
-        if (credential)
+        if (credential) {
+          credentialChanged = true;
           await credentials.set(credential.url, credential.before);
+        }
         entry.restored = true;
         entry.restoredAt = new Date().toISOString();
+        if (recoveryDir) entry.recoveryDir = recoveryDir;
         await atomic(journalPath, json(entries));
         return entry;
       } catch (error) {
-        for (const file of changed.reverse())
-          await atomic(file.path, file.current);
-        if (credential) await credentials.set(credential.url, credential.after);
+        for (const file of changed.reverse()) {
+          if (file.current === null) await fs.rm(file.path, { force: true });
+          else await atomic(file.path, file.current);
+        }
+        if (credentialChanged) await credentials.set(credential.url, currentCredential);
         throw error;
       }
     });
   }
+  async function restoreFiles(id) {
+    const entry = (await history()).find(item => item.id === id);
+    if (!entry || entry.restored) throw new Error("备份不存在或已恢复");
+    return Promise.all(entry.files.map(async file => ({
+      index: file.index,
+      path: file.path,
+      exists: (await read(file.path)) !== null,
+      backupPath: file.existed ? path.join(dataDir, "backups", entry.id, file.index + ".bak") : null,
+    })));
+  }
   const configInspector = require('./config-inspector.cjs').createConfigInspector({
     dirs, home, env, platform, claudeDesktopThreepDir, profileId: claudeDesktopProfileId, read,
   });
-  return { detect, preview, apply, restore, history, inspectConfig: configInspector.inspect };
+  return { detect, preview, apply, restore, restoreFiles, history, inspectConfig: configInspector.inspect };
 }
 
 async function testConnection(raw) {

@@ -62,3 +62,14 @@ API 基址：`https://api.onelinkai.cloud`。
 ## 平台侧需要处理的发现
 
 公开主 bundle 中包含 OAuth `client_secret` 配置（此处不记录值）。请核实其有效性，若有效则轮换并迁移到服务端；不要让桌面客户端复用此值。前端还存在将 token 拼入 console 输出的代码，建议移除，避免通过截图、诊断日志泄漏。第三方 OAuth 配置建议单独审查，与本次只读接口对接分开处理。
+
+
+## 2026-11-13 线上版本复核
+
+依据当日线上公开资源 `main-W0KR-Q6t.js`、`APIKeyPanel-D3WLBd3D.js`、`index-BItdeqhG.js`、`CommonRecordPage-CEBs-4FK.js` 的调用点。此次未使用真实登录凭据，因此返回值和账户权限仍需登录联调验证。
+
+- Key 列表仍是 `POST /user/user/apikey/page`。组织页新增 `keyword,keyTypeFilter,displayStatus`；`keyType=0` 表示个人密钥（成员预算），`1` 表示组织密钥（组织账户承担，管理员可见）。不能用 `tenantType` 推断组织空间里每把 Key 的类型。桌面端在已分页拉全的列表上做名称和类型筛选；未知类型明确显示“类型未返回”。用量读取新版 `spend`，兼容旧 `consumeQuota`。组织金额展示积分，个人空间展示人民币。
+- 日志列表与详情仍用 `/log/user/call/list` 和 `/log/user/call/{id}`。管理员查询全组织时不传 `userId`；普通成员和个人空间固定传当前登录用户 ID。管理员可通过 `GET /log/user/call/tenantConsumptionUsers?tenantId=...` 加载成员筛选；供应商和模型选项遵循相同用户范围。
+- 新增适配 `modelType,consumptionType,firstLatency,totalLatency,endReason,dataRetentionSwitch,callType,taskStatus,retryCount,supplierTimeline,toolCallDetails,consumptionId`。两个新耗时字段以毫秒显示；隐私模式不留存正文；异步处理中优先于普通响应状态显示。仍仅传递允许的日志字段，不直接返回整个响应。
+- 线上另有统计 `/log/user/call/getUserCallStatistics`、导出 `/log/user/call/export` 以及上下文 `/v1/user/relay/{consumptionId}`；此次保留桌面端现有只读列表和详情范围，未增加导出、上下文或统计操作。
+- 已补充模拟接口测试覆盖类型、缺失值、零耗时、新版用量、管理员全组织/成员过滤、普通成员越权拒绝和日志字段白名单。

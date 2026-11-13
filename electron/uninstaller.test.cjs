@@ -240,7 +240,7 @@ for (const [id, pkg] of Object.entries(packages)) {
   });
 }
 
-const desktopApps = { 'claude-desktop': 'Claude.app', codex: 'Codex.app', 'deepseek-harness': 'DeepSeek Harness.app', zed: 'Zed.app', vscode: 'Visual Studio Code.app', zcode: 'ZCode.app', workbuddy: 'WorkBuddy.app' };
+const desktopApps = { 'claude-desktop': 'Claude.app', codex: 'Codex.app', 'deepseek-harness-desktop': 'DeepSeek Harness.app', zed: 'Zed.app', vscode: 'Visual Studio Code.app', zcode: 'ZCode.app', workbuddy: 'WorkBuddy.app' };
 for (const [id, name] of Object.entries(desktopApps)) {
   for (const outcome of ['success', 'cancel', 'no-removal']) test(`desktop ${id}: ${outcome}`, async t => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'onelink-app-matrix-'));
@@ -323,4 +323,31 @@ for (const mode of ['failed', 'unchanged', 'unwritable', 'missing-receipt']) tes
   if (mode === 'unwritable' || mode === 'missing-receipt') { assert.equal(p.supported, false); await assert.rejects(s.uninstall({ client: 'gemini', target: executable })); assert.equal(calls, 0); }
   else await assert.rejects(s.uninstall({ client: 'gemini', target: executable }), mode === 'failed' ? /brew failed/ : /仍存在/);
   await fs.access(executable);
+});
+
+test('DSH uninstall selects the CLI or desktop installation without removing its sibling or configuration', async t => {
+  const { createAgentService } = require('./agents.cjs');
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'onelink-dsh-uninstall-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const bin = path.join(home, '.onelinkai/managed/bin');
+  const bundle = path.join(home, 'Applications/DeepSeek Harness.app');
+  await fs.mkdir(bin, { recursive: true }); await fs.mkdir(bundle, { recursive: true });
+  for (const name of ['dsh', 'deepseek-harness']) await fs.writeFile(path.join(bin, name), 'shim', { mode: 0o700 });
+  const config = path.join(home, '.dsh/profiles/desktop/cordis.patch.yml');
+  await fs.mkdir(path.dirname(config), { recursive: true }); await fs.writeFile(config, 'keep');
+  const agents = createAgentService({ home, dataDir: path.join(home, 'state'), platform: 'darwin', env: { PATH: bin }, applicationDirs: [path.dirname(bundle)], command: async () => ({ stdout: '0.2.1' }) });
+  const service = createUninstaller({ home, platform: 'darwin', detect: agents.detect,
+    execute: async (_node, args) => assert.equal(args.at(-1), '@deepseek-ai/dsh'),
+    trashItem: async file => { assert.equal(file, bundle); await fs.rename(file, path.join(home, 'trashed-app')); },
+  });
+  assert.equal((await service.plan('deepseek-harness')).kind, 'managed');
+  assert.equal((await service.plan('deepseek-harness-desktop')).target, bundle);
+  await service.uninstall({ client: 'deepseek-harness-desktop', target: bundle });
+  await fs.access(path.join(bin, 'dsh'));
+  assert.equal((await agents.detect()).find(c => c.id === 'deepseek-harness').installed, true);
+  // Recreate desktop to verify CLI uninstall in the opposite direction too.
+  await fs.mkdir(bundle);
+  await service.uninstall({ client: 'deepseek-harness', target: path.join(bin, 'deepseek-harness') });
+  await fs.access(bundle); await assert.rejects(fs.access(path.join(bin, 'dsh')), { code: 'ENOENT' });
+  assert.equal(await fs.readFile(config, 'utf8'), 'keep');
 });

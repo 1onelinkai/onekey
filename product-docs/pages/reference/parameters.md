@@ -71,6 +71,7 @@ Pi、Zed、WorkBuddy、VS Code 若只填一个大于默认128000的 maxTokens，
 | [zcode](/reference/agents/zcode) | 模型显示名称、上下文窗口、最大输出 Token、图片输入 |
 | [workbuddy](/reference/agents/workbuddy) | 模型显示名称、上下文窗口、最大输出 Token、图片输入、工具调用、推理能力 |
 | [hermes](/reference/agents/hermes) | 上下文窗口、推理档位 |
+| [deepseek-harness-desktop](/reference/agents/deepseek-harness-desktop) | 模型显示名称、上下文窗口、最大输出 Token、图片输入 |
 
 <!-- /CAPABILITY_MATRIX -->
 

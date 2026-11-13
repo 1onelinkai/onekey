@@ -54,6 +54,8 @@ Windows `.cmd/.bat` 在通用探测阶段不通过 shell 直接执行；托管 n
 
 ## 检测的成本和边界
 
-15 个 Agent 并行检测，但每个客户端的目录查找和版本命令仍有实际耗时。`--version` 通常是轻量操作，依然会执行第三方程序；检测不等于纯静态读取所有文件。
+16 个 Agent 入口并行检测，但每个客户端的目录查找和版本命令仍有实际耗时。`--version` 通常是轻量操作，依然会执行第三方程序；检测不等于纯静态读取所有文件。
 
 它不会确认 API Key 有效、不测试模型调用、不校验登录态，也不会确认当前正在运行的进程使用了刚读到的配置。来源：`electron/agents.cjs` 的 `locate/detect`。
+
+DSH CLI 与 Desktop 是两个独立入口：CLI 只依据 dsh 命令判断，Desktop 只依据 DeepSeek Harness.app 判断；两者同时存在时分别显示安装路径和版本。旧版写入 desktop profile 的配置记录归到 Desktop，避免误显示为 CLI 已配置。

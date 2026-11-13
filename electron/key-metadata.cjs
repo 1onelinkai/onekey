@@ -1,7 +1,7 @@
 function keyMetadata(record, now = Date.now()) {
   const number = value => value == null || value === '' || !Number.isFinite(Number(value)) ? null : Number(value);
   const quota = number(record.quota);
-  const used = number(record.consumeQuota);
+  const used = number(record.spend ?? record.consumeQuota);
   const unlimited = record.quota === null || quota === -1;
   const exhausted = quota != null && quota >= 0 && (quota === 0 || used != null && used >= quota);
   const rawExpiry = record.expiredTime;

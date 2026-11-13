@@ -8,10 +8,11 @@
   "openclaw": "支持模型规格、图片与推理能力、默认推理档位及子代理模型。跨服务商子代理请填写完整 provider/model ID。",
   "pi": "支持模型规格、图片与推理能力以及默认思考档位。请确认模型实际支持所选能力。",
   "minimax": "支持上下文、输出上限和图片输入能力，采用自定义模型的 limit 与 capabilities 字段。",
-  "deepseek-harness": "支持上下文、输出上限与图片输入，写入 desktop profile 的 pi-ai 模型条目。其他 profile 需单独配置。",
+  "deepseek-harness": "支持上下文、输出上限与图片输入。默认写入 web profile，可指定其他 CLI profile；使用相同 profile 启动。",
   "zed": "支持模型规格、图片输入与工具调用。仅写入模型定义，API Key 请在 Zed 中手动填写。",
   "vscode": "支持模型规格、图片、工具与推理能力。仅写入默认 Profile 的模型定义；之后需在 VS Code 的管理模型中为 OneLinkAI / Custom Endpoint 保存 API Key。",
   "zcode": "支持上下文、输出上限和图片输入能力，写入 v2 模型配置。",
   "workbuddy": "支持上下文、输出上限、图片、工具和推理能力；配置后需在应用中选择模型。",
-  "hermes": "支持上下文与默认推理档位。Hermes 官方将输出上限交给提供方管理，不提供用户配置项。"
+  "hermes": "支持上下文与默认推理档位。Hermes 官方将输出上限交给提供方管理，不提供用户配置项。",
+  "deepseek-harness-desktop": "支持上下文、输出上限与图片输入，仅写入桌面应用的 desktop profile。配置后完全退出并重启桌面版。"
 }

@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { version } = require('../../package.json');
 const agents = [
- ['claude','Claude Code'],['claude-desktop','Claude Desktop'],['codex','Codex'],['gemini','Gemini CLI'],['grok','Grok Build'],['opencode','OpenCode'],['openclaw','OpenClaw'],['pi','Pi'],['minimax','MiniMax Code'],['deepseek-harness','DeepSeek Harness'],['zed','Zed'],['vscode','VS Code'],['zcode','ZCode'],['workbuddy','WorkBuddy'],['hermes','Hermes'],
+ ['claude','Claude Code'],['claude-desktop','Claude Desktop'],['codex','Codex'],['gemini','Gemini CLI'],['grok','Grok Build'],['opencode','OpenCode'],['openclaw','OpenClaw'],['pi','Pi'],['minimax','MiniMax Code'],['deepseek-harness','DeepSeek Harness CLI'],['deepseek-harness-desktop','DeepSeek Harness Desktop'],['zed','Zed'],['vscode','VS Code'],['zcode','ZCode'],['workbuddy','WorkBuddy'],['hermes','Hermes'],
 ];
 const group = (text, entries) => ({ text, items: entries.map(([text, link]) => ({ text, link })) });
 export default defineConfig({

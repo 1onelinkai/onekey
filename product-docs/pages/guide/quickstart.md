@@ -46,7 +46,8 @@
 | VS Code | 在管理模型中为 OneLinkAI / Custom Endpoint 保存 API Key，使用默认 Profile，或另配其他 Profile |
 | Claude Desktop | 完全退出重启，按提示选择 OneLinkAI 第三方网关配置 |
 | WorkBuddy、ZCode | 重启后在应用内选择 OneLinkAI 模型 |
-| DSH | 使用本次配置的 desktop profile；其他 profile 单独设置 |
+| DSH CLI | 默认写入 web profile，以 `dsh web` 启动；其他 CLI profile 在配置窗口指定 |
+| DSH Desktop | 写入 desktop profile，完全退出并重启桌面版 |
 | 其他客户端 | 重启或新建会话；旧进程可能继续使用旧参数 |
 
 ## 7. 核对结果或恢复

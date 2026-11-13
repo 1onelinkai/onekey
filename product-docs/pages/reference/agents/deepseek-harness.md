@@ -1,4 +1,4 @@
-# DeepSeek Harness 配置参考
+# DeepSeek Harness CLI 配置参考
 
 本页以 **OneLinkAI Desktop 0.3.2** 当前适配器为准。示例以 macOS 路径呈现，由 `generate-product-docs.mjs` 调用真实适配器生成；输入为虚构地址和 Key，没有读取本机用户配置，也没有进行真实模型调用。
 
@@ -15,21 +15,21 @@
 
 ## 写入范围与保留规则
 
-更新 profiles/desktop/cordis.patch.yml 中最后一条 llm-pi-ai patch 的 onelinkai provider 与 agent-default-model patch；保留其他 provider。更新 .credentials.yaml 中指定引用。存在旧 OneLinkAI DSH_* 环境变量 / onelinkai-model 旧 patch 时，仅清理这些已知旧项。
+更新 profiles/web/cordis.patch.yml 中最后一条 llm-pi-ai patch 的 onelinkai provider 与 agent-default-model patch；保留其他 provider。更新 .credentials.yaml 中指定引用。CLI 不清理桌面版的旧配置。
 
 ## Key 保存与手动步骤
 
-.credentials.yaml 的 refs.ONELINKAI_API_KEY；模型 patch 只写 apiKeyEnv 引用，不内嵌 Key。认证文件预览正文隐藏。
+.credentials.yaml 的 refs.ONELINKAI_CLI_776562_API_KEY；模型 patch 只写 apiKeyEnv 引用，不内嵌 Key。认证文件预览正文隐藏。
 
 ## 字段如何映射
 
 | 原生配置字段 | 写入规则 |
 | --- | --- |
-| `llm-pi-ai.config.providers.onelinkai.apiKeyEnv` | ONELINKAI_API_KEY |
+| `llm-pi-ai.config.providers.onelinkai.apiKeyEnv` | ONELINKAI_CLI_776562_API_KEY |
 | `…api / baseURL` | 协议枚举 / Anthropic 根地址或其他 + /v1 |
 | `…models[]` | ID、显示名、窗口、输出与 input |
 | `agent-default-model.config` | provider=onelinkai 与本次模型 |
-| `.credentials.yaml.version / refs.ONELINKAI_API_KEY` | 要求 version=1，更新引用值 |
+| `.credentials.yaml.version / refs.ONELINKAI_CLI_776562_API_KEY` | 要求 version=1，更新引用值 |
 
 ## 本应用支持的高级参数
 
@@ -38,7 +38,7 @@
 - `maxTokens`：最大输出 Token。
 - `supportsImages`：图片输入。
 
-支持上下文、输出上限与图片输入，写入 desktop profile 的 pi-ai 模型条目。其他 profile 需单独配置。
+支持上下文、输出上限与图片输入。默认写入 web profile，可指定其他 CLI profile；使用相同 profile 启动。
 
 没有为本应用开放额外的通用推理档位映射。
 
@@ -48,7 +48,7 @@
 
 示例输入：模型 `example-model`、服务根地址 `https://api.example.com`、OpenAI Chat Completions。展示的是空配置文件上的完整结果；已有文件会按前述规则修改。`<API_KEY>` 为预览脱敏符号，实际写入由主进程持有的 Key。
 
-### ~/.dsh/profiles/desktop/cordis.patch.yml
+### ~/.dsh/profiles/web/cordis.patch.yml
 
 ```yaml
 [
@@ -62,7 +62,7 @@
               onelinkai:
                 {
                   displayName: OneLinkAI,
-                  apiKeyEnv: ONELINKAI_API_KEY,
+                  apiKeyEnv: ONELINKAI_CLI_776562_API_KEY,
                   api: openai-completions,
                   baseURL: https://api.example.com/v1,
                   models: [ { id: example-model, name: example-model } ]
@@ -80,10 +80,7 @@
 ### ~/.dsh/.credentials.yaml
 
 ```yaml
-version: 1
-refs:
-  ONELINKAI_API_KEY: <API_KEY>
-# 已有凭据保留，预览隐藏全部凭据内容
+# DSH 凭据文件：本次 API Key 与已有凭据均已隐藏
 ```
 
 ## 填写高级参数后的生成结果
@@ -99,7 +96,7 @@ refs:
 }
 ```
 
-### ~/.dsh/profiles/desktop/cordis.patch.yml
+### ~/.dsh/profiles/web/cordis.patch.yml
 
 ```yaml
 [
@@ -113,7 +110,7 @@ refs:
               onelinkai:
                 {
                   displayName: OneLinkAI,
-                  apiKeyEnv: ONELINKAI_API_KEY,
+                  apiKeyEnv: ONELINKAI_CLI_776562_API_KEY,
                   api: openai-completions,
                   baseURL: https://api.example.com/v1,
                   models:
@@ -140,17 +137,14 @@ refs:
 ### ~/.dsh/.credentials.yaml
 
 ```yaml
-version: 1
-refs:
-  ONELINKAI_API_KEY: <API_KEY>
-# 已有凭据保留，预览隐藏全部凭据内容
+# DSH 凭据文件：本次 API Key 与已有凭据均已隐藏
 ```
 
 ## 生效与使用注意
 
-这是 desktop profile，CLI 若使用其他 profile 需单独配置。不能继续用旧的 DSH_PROVIDER/MODEL/BASE_URL/API_KEY 环境键代替 Cordis 路由。旧 .env 清理只删除这四个名字，其他行保留。
+默认配置 web profile，以 dsh web 启动 WebUI。可在配置窗口填写其他 CLI profile；每个 profile 的凭据引用独立，desktop 名称仅供桌面版使用。
 
-**当前写入提示：** 已配置 DSH desktop profile；CLI 使用其他 profile 时需单独配置。配置写入校验不代表模型请求成功。
+**当前写入提示：** 已配置 DSH CLI 的 web profile；使用 dsh --profile web 启动，配置写入校验不代表模型请求成功。
 
 ## 失败、回滚与恢复
 

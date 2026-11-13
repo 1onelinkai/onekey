@@ -62,7 +62,8 @@ function createConfigInspector({ dirs, home, env, claudeDesktopThreepDir, profil
       grok: ['config.toml'], opencode: ['opencode.jsonc', 'opencode.json'],
       openclaw: [env.OPENCLAW_CONFIG_PATH ? path.basename(env.OPENCLAW_CONFIG_PATH) : 'openclaw.json', '.env'],
       pi: ['settings.json', 'models.json', 'models-store.json', 'auth.json'], minimax: ['config.yaml'],
-      'deepseek-harness': ['profiles/desktop/cordis.patch.yml', 'config.yaml', '.credentials.yaml', '.env'],
+      'deepseek-harness': ['profiles/web/cordis.patch.yml', 'cordis.patch.yml', 'config.yaml', '.credentials.yaml', '.env'],
+      'deepseek-harness-desktop': ['profiles/desktop/cordis.patch.yml', 'cordis.patch.yml', '.credentials.yaml'],
       zed: ['settings.json'], vscode: ['settings.json', 'chatLanguageModels.json'],
       zcode: ['config.json', 'setting.json', 'model-providers.json', 'credentials.json'], workbuddy: ['models.json', 'settings.json', 'mcp.json', 'mcp-approvals.json'], hermes: ['config.yaml', '.env'],
     };
@@ -74,6 +75,7 @@ function createConfigInspector({ dirs, home, env, claudeDesktopThreepDir, profil
         : env.XDG_CONFIG_HOME || path.join(home, '.config');
       files.push({ path: path.join(appRoot, 'WorkBuddy/User/settings.json'), label: 'WorkBuddy / User / settings.json' });
     }
+    if (client === 'opencode') files.push({ path: path.join(env.XDG_STATE_HOME || path.join(home, '.local/state'), 'opencode/model.json'), label: 'OpenCode / model preference' });
     if (client === 'claude') files.push({ path: path.join(home, '.claude.json'), label: '~/.claude.json' });
     if (client === 'claude-desktop') files.push(
       { path: path.join(claudeDesktopThreepDir, 'claude_desktop_config.json'), label: 'Claude-3p / claude_desktop_config.json' },
@@ -97,7 +99,7 @@ function createConfigInspector({ dirs, home, env, claudeDesktopThreepDir, profil
         for (const entry of entries) {
           if (files.length >= 40) { notes.push('配置文件较多，本次最多展示 40 个，请在客户端检查其余 Profile。'); break; }
           if (discovery.file && entry.isFile() && /^[\w-]+\.json$/.test(entry.name)) add(path.join(discovery.root, entry.name), 'Claude-3p / configLibrary / ' + entry.name);
-          else if (!discovery.file && entry.isDirectory() && /^[\w-]+$/.test(entry.name)) {
+          else if (!discovery.file && entry.isDirectory() && /^[\w-]+$/.test(entry.name) && !(client === 'deepseek-harness' && entry.name.toLowerCase() === 'desktop')) {
             for (const name of discovery.names) if (files.length < 40) add(path.join(discovery.root, entry.name, name), 'profiles / ' + entry.name + ' / ' + name);
           }
         }

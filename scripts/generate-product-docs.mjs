@@ -58,11 +58,16 @@ const definitions = [
  key:'custom_provider.onelinkai.options.apiKey，authMode=api-key。',
  fields:[['custom_provider.onelinkai.kind / enabled','custom / true'],['…api','按三种协议映射 API 枚举'],['…options.baseURL','Anthropic 为根地址，其余 + /v1'],['…models.<ID>.limit.context / output','contextWindow / maxTokens'],['…models.<ID>.capabilities.support_image','supportsImages，仅明确填写时写'],['defaultModel','custom_provider:onelinkai/<ID>']],
  after:'命令入口可能为 mcode、minimax、minimax-code。检测有别名，托管安装额外生成 mcode 别名。模型调用能力需服务商和所选协议真正支持，不由模型 ID 是否含 MiniMax 决定。'},
- {id:'deepseek-harness',name:'DeepSeek Harness',protocol:'openai',directory:'~/.dsh',environment:'DSH_HOME',
+ {id:'deepseek-harness',name:'DeepSeek Harness CLI',protocol:'openai',directory:'~/.dsh',environment:'DSH_HOME',
+ scope:'更新 profiles/web/cordis.patch.yml 中最后一条 llm-pi-ai patch 的 onelinkai provider 与 agent-default-model patch；保留其他 provider。更新 .credentials.yaml 中指定引用。CLI 不清理桌面版的旧配置。',
+ key:'.credentials.yaml 的 refs.ONELINKAI_CLI_776562_API_KEY；模型 patch 只写 apiKeyEnv 引用，不内嵌 Key。认证文件预览正文隐藏。',
+ fields:[['llm-pi-ai.config.providers.onelinkai.apiKeyEnv','ONELINKAI_CLI_776562_API_KEY'],['…api / baseURL','协议枚举 / Anthropic 根地址或其他 + /v1'],['…models[]','ID、显示名、窗口、输出与 input'],['agent-default-model.config','provider=onelinkai 与本次模型'],['.credentials.yaml.version / refs.ONELINKAI_CLI_776562_API_KEY','要求 version=1，更新引用值']],
+ after:'默认配置 web profile，以 dsh web 启动 WebUI。可在配置窗口填写其他 CLI profile；每个 profile 的凭据引用独立，desktop 名称仅供桌面版使用。'},
+ {id:'deepseek-harness-desktop',name:'DeepSeek Harness Desktop',protocol:'openai',directory:'~/.dsh',environment:'DSH_HOME',
  scope:'更新 profiles/desktop/cordis.patch.yml 中最后一条 llm-pi-ai patch 的 onelinkai provider 与 agent-default-model patch；保留其他 provider。更新 .credentials.yaml 中指定引用。存在旧 OneLinkAI DSH_* 环境变量 / onelinkai-model 旧 patch 时，仅清理这些已知旧项。',
  key:'.credentials.yaml 的 refs.ONELINKAI_API_KEY；模型 patch 只写 apiKeyEnv 引用，不内嵌 Key。认证文件预览正文隐藏。',
  fields:[['llm-pi-ai.config.providers.onelinkai.apiKeyEnv','ONELINKAI_API_KEY'],['…api / baseURL','协议枚举 / Anthropic 根地址或其他 + /v1'],['…models[]','ID、显示名、窗口、输出与 input'],['agent-default-model.config','provider=onelinkai 与本次模型'],['.credentials.yaml.version / refs.ONELINKAI_API_KEY','要求 version=1，更新引用值']],
- after:'这是 desktop profile，CLI 若使用其他 profile 需单独配置。不能继续用旧的 DSH_PROVIDER/MODEL/BASE_URL/API_KEY 环境键代替 Cordis 路由。旧 .env 清理只删除这四个名字，其他行保留。'},
+ after:'这是桌面应用独立的 desktop profile，CLI 请使用单独的 DeepSeek Harness CLI 入口配置。不能继续用旧的 DSH_PROVIDER/MODEL/BASE_URL/API_KEY 环境键代替 Cordis 路由。旧 .env 清理只删除这四个名字，其他行保留。'},
  {id:'zed',name:'Zed',protocol:'openai',directory:'~/.config/zed（macOS）',environment:'Linux 遵循 XDG_CONFIG_HOME；Windows 为 APPDATA/Zed',
  scope:'settings.json 定点替换 language_models.openai_compatible.OneLinkAI 并设置 agent.default_model。其他提供方保留，OneLinkAI 的 available_models 本次替换为单模型。',
  key:'当前生产启动没有向适配器注入 credentials；工作台不写 Zed 钥匙串，生成结果不含 API Key。请在 Zed 自己的设置里手动填写。',
@@ -98,7 +103,8 @@ const home = await mkdtemp(path.join(tmpdir(),'onelink-doc-examples-'));
 try {
  const bin = path.join(home,'bin'); await mkdir(bin);
  for (const name of ['claude','claude-desktop','codex','gemini','grok','opencode','openclaw','pi','mcode','dsh','zed','code','zcode','workbuddy','hermes']) await writeFile(path.join(bin,name),'placeholder',{mode:0o700});
- const service = createAgentService({home,dataDir:path.join(home,'state'),platform:'darwin',env:{PATH:bin},applicationDirs:[],command:async()=>({stdout:'1.0.0\n'})});
+ await mkdir(path.join(home,'Applications/DeepSeek Harness.app'), {recursive:true});
+ const service = createAgentService({home,dataDir:path.join(home,'state'),platform:'darwin',env:{PATH:bin},applicationDirs:[path.join(home,'Applications')],command:async()=>({stdout:'1.0.0\n'})});
  const advanced = {name:'示例显示名称',contextWindow:128000,maxTokens:8192,reasoningEffort:'high',subagentModel:'helper-model',compactThreshold:96000,reviewModel:'review-model',thinkingBudget:1024,supportsImages:true,supportsTools:true,supportsReasoning:true,supports1m:true};
  const normalize = value => value.split(home).join('~');
  const index = [];
@@ -112,7 +118,7 @@ try {
    `# ${d.name} 配置参考`,
    `本页以 **OneLinkAI Desktop ${version}** 当前适配器为准。示例以 macOS 路径呈现，由 \`generate-product-docs.mjs\` 调用真实适配器生成；输入为虚构地址和 Key，没有读取本机用户配置，也没有进行真实模型调用。`,
    '## 入口与要求',
-   `| 项目 | 当前行为 |\n| --- | --- |\n| 配置目录 | ${d.directory} |\n| 路径覆盖规则 | ${d.environment} |\n| 本页示例协议 | ${protocolName[d.protocol]} |\n| 一键初装 | ${packages[d.id]?'macOS / Windows 托管 npm：`'+packages[d.id]+'`':d.id==='hermes'?'macOS / Windows 官方分阶段源码安装':d.id==='grok'?'macOS / Windows 官方二进制':'macOS 官方桌面包；Windows 使用原渠道'} |`,
+   `| 项目 | 当前行为 |\n| --- | --- |\n| 配置目录 | ${d.directory} |\n| 路径覆盖规则 | ${d.environment} |\n| 本页示例协议 | ${protocolName[d.protocol]} |\n| 一键初装 | ${packages[d.id]?'macOS / Windows 托管 npm：`'+packages[d.id]+'`':d.id==='hermes'?'macOS / Windows 官方分阶段源码安装':d.id==='grok'?'macOS / Windows 官方二进制':d.id==='deepseek-harness-desktop'?'使用官方桌面版原安装渠道':'macOS 官方桌面包；Windows 使用原渠道'} |`,
    '更多协议限制见[协议总表](/principles/protocols)。能安装与能升级分别判断；当前来源决定一键升级条件，不能只按本页应用名称判断。',
    '## 写入范围与保留规则',d.scope,
    '## Key 保存与手动步骤',d.key,
@@ -142,6 +148,6 @@ try {
   await save(path.join(output,d.id+'.md'),markdown);
   index.push(`| [${d.name}](/reference/agents/${d.id}) | ${d.directory} | ${d.protocol} | ${['zed','vscode'].includes(d.id)?'在目标应用手动保存':'按原生文件写入'} |`);
  }
- await save(path.join(output,'index.md'),`# 15 个 Agent 配置总表\n\n这里列出当前适配器实际覆盖的客户端。每个详情页包含写入范围、原生字段、凭据位置、最小与高级参数生成示例、手动步骤及限制。所有示例由实际适配器离线生成。\n\n| Agent | 默认配置目录（主要为 macOS） | 示例协议 | Key 处理 |\n| --- | --- | --- | --- |\n${index.join('\n')}\n\n## 选择之前先确认\n\n1. 确认模型 ID 与协议，不按名字猜兼容性。\n2. 确认当前用户级目录以及环境变量覆盖。\n3. 阅读本 Agent 的覆盖范围，尤其是整个 provider 被替换的情形。\n4. 预览文件并确认手动凭据步骤。\n5. 写入后在目标客户端新建会话验证。\n\n这里的目录与字段不代表其他版本 Agent 永远相同。Windows / Linux 路径和实机验证范围另见[当前状态](/reference/status)，共用参数见[参数说明](/reference/parameters)。\n`);
+ await save(path.join(output,'index.md'),`# ${definitions.length} 个 Agent 配置总表\n\n这里列出当前适配器实际覆盖的客户端。每个详情页包含写入范围、原生字段、凭据位置、最小与高级参数生成示例、手动步骤及限制。所有示例由实际适配器离线生成。\n\n| Agent | 默认配置目录（主要为 macOS） | 示例协议 | Key 处理 |\n| --- | --- | --- | --- |\n${index.join('\n')}\n\n## 选择之前先确认\n\n1. 确认模型 ID 与协议，不按名字猜兼容性。\n2. 确认当前用户级目录以及环境变量覆盖。\n3. 阅读本 Agent 的覆盖范围，尤其是整个 provider 被替换的情形。\n4. 预览文件并确认手动凭据步骤。\n5. 写入后在目标客户端新建会话验证。\n\n这里的目录与字段不代表其他版本 Agent 永远相同。Windows / Linux 路径和实机验证范围另见[当前状态](/reference/status)，共用参数见[参数说明](/reference/parameters)。\n`);
  console.log(`${check?'Checked':'Generated'} ${definitions.length} Agent pages and overview from production adapters.`);
 } finally { await rm(home,{recursive:true,force:true}); }

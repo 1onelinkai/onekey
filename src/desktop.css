@@ -1026,3 +1026,76 @@
 .model-import-footer > span { margin-right: auto; font-size: 11px; color: #888; }
 .software-update { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .software-update .text-button { font-size: 11px; }
+
+.restore-actions, .restore-file-actions { flex-wrap: wrap; }
+.restore-file-actions { display: flex; gap: 8px; margin: 12px 0; }
+.manual-restore-files { max-height: 45vh; overflow-y: auto; }
+.manual-restore-files section { padding: 16px 0; border-bottom: 1px solid #edf0ee; }
+.manual-restore-files code, .manual-restore-files small { display: block; overflow-wrap: anywhere; }
+.manual-restore-files small { color: #737b77; }
+
+.agent-tile-footer .agent-launch-button { flex-shrink: 0; gap: 4px; padding: 4px 0; }
+
+.key-type-filter {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #e3e9e5;
+  border-radius: 7px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+/* Keep frequent actions on one line; secondary actions live in the popover. */
+.workspace-app .agent-tile-footer {
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 42px;
+}
+.workspace-app .agent-tile-footer > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.workspace-app .agent-tile-footer .agent-config-button {
+  margin-left: auto;
+  gap: 7px;
+}
+.workspace-app .agent-tile-footer .agent-more-button {
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  color: #8a8a8a;
+  border-radius: 6px;
+}
+.workspace-app .agent-more-button:hover { background: #f3f3f3; color: #444; }
+.agent-card-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 5px;
+  width: 154px;
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 28px #00000014;
+  color: #555;
+}
+.agent-card-menu:popover-open { display: grid; gap: 3px; }
+.agent-card-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 9px 10px;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  cursor: pointer;
+}
+.agent-card-menu button:hover, .agent-card-menu button:focus-visible { background: #f5f5f5; outline: 0; }
+.agent-card-menu .agent-menu-danger { color: #b4564e; }

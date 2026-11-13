@@ -139,3 +139,48 @@ test('login creates no session directory or credential file', async t => {
   assert.equal((await service.acceptSession({ accessToken: 'private-token' })).authenticated, true);
   assert.deepEqual(await fs.readdir(directory), []);
 });
+
+test('current API preserves key types and scopes organization logs by server-provided admin role', async () => {
+  const calls = [];
+  const service = createLivePlatform({ fetcher: async (url, options) => {
+    const endpoint = new URL(url).pathname;
+    const body = options.body ? JSON.parse(options.body) : {};
+    calls.push({ endpoint, body, query: new URL(url).searchParams });
+    let data;
+    if (endpoint === '/sso/client/getUserInfo') data = { userDetails: { userId: 7 } };
+    else if (endpoint === '/user/user/userTenantList') data = [{ id: 8, tenantName: '组织', adminRole: true }, { id: 9, tenantName: '成员组织', adminRole: false }];
+    else if (endpoint === '/user/user/apikey/page') data = { total: 4, records: [
+      { id: 1, keyType: 0, status: 1, quota: 100, spend: 15 }, { id: 2, keyType: '1' }, { id: 3 }, { id: 4, keyType: 99 },
+    ] };
+    else if (endpoint === '/log/user/call/tenantConsumptionUsers') data = [{ userId: 11, userName: '成员' }, { userId: 11, userName: '成员' }];
+    else if (endpoint.endsWith('/supplierList') || endpoint.endsWith('/modelList') || endpoint.endsWith('/model_type')) data = [];
+    else if (endpoint === '/log/user/call/list') data = { total: 1, records: [{ id: 'new-log', callType: 'async', taskStatus: 'processing', firstLatency: 0, totalLatency: 1234, dataRetentionSwitch: 1, retryCount: 2, supplierTimeline: { attempts: [] }, apiKeyPlain: 'secret' }] };
+    else throw new Error(endpoint);
+    return { ok: true, json: async () => ({ code: 200, data }) };
+  } });
+  await service.acceptSession({ accessToken: 'test-token' });
+  const keys = await service.list('8');
+  assert.deepEqual(keys.map(key => key.keyType), [0, 1, null, null]);
+  assert.equal(keys[0].budget.used, 15);
+  assert.deepEqual((await service.list('personal')).map(key => key.keyType), [0, 0, 0, 0]);
+  const filters = await service.requestOptions({ org: '8' });
+  assert.deepEqual(filters.users, [{ value: '11', label: '成员' }]);
+  assert.equal(calls.find(call => call.endpoint.endsWith('/supplierList')).query.has('userId'), false);
+  const logs = await service.requests({ org: '8' });
+  assert.equal(logs.items[0].status, 'processing');
+  assert.equal(logs.items[0].fields.firstLatency, 0);
+  assert.equal(logs.items[0].fields.dataRetentionSwitch, 1);
+  assert.equal(logs.items[0].fields.apiKeyPlain, undefined);
+  assert.deepEqual(logs.items[0].fields.supplierTimeline, { attempts: [] });
+  assert.equal(calls.at(-1).body.userId, undefined);
+  assert.equal(calls.at(-1).body.tenantId, 8);
+  await service.requests({ org: '8', userId: '11' });
+  assert.equal(calls.at(-1).body.userId, '11');
+  await assert.rejects(service.requests({ org: '8', userId: '../oops' }), /无权/);
+  await service.requests({ org: '9' });
+  assert.equal(calls.at(-1).body.userId, 7);
+  await assert.rejects(service.requests({ org: '9', userId: '11' }), /无权/);
+  await service.requests({ org: 'personal' });
+  assert.equal(calls.at(-1).body.userId, 7);
+  assert.equal(calls.at(-1).body.tenantId, undefined);
+});

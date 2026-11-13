@@ -263,3 +263,17 @@ test('failed version queries retain local upgrade capability and installation or
   assert.equal(item.upgradable, true);
   assert.equal(item.origin, 'OneLinkAI 托管 npm');
 });
+
+test('DSH Desktop never queries or upgrades using the CLI npm package', async () => {
+  const desktop = { id: 'deepseek-harness-desktop', installed: true, bundle: '/Applications/DeepSeek Harness.app', version: '0.2.1-rc.3' };
+  const service = createAgentUpdates({ detect: async () => [desktop],
+    system: { platform: 'darwin', arch: 'arm64', release: '24.0' },
+    fetcher: async () => { throw new Error('Desktop must not query npm'); },
+  });
+  const [item] = await service.describe([desktop]);
+  assert.equal(item.id, desktop.id); assert.equal(item.management.installable, false);
+  assert.equal(item.management.upgradable, false);
+  const checked = await service.check(desktop.id);
+  assert.equal(checked.status, 'unsupported'); assert.equal(checked.target, desktop.bundle);
+  await assert.rejects(service.upgrade(desktop.id), /桌面版/);
+});
