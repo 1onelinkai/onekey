@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url);
 const { version } = require('../package.json');
 const arguments_ = process.argv.slice(2);
 const requireGatekeeper = arguments_.includes('--require-gatekeeper');
-const source = path.resolve(arguments_.find(argument => !argument.startsWith('--')) || `release/distribution/OneLinkAI-${version}-arm64-notarized.dmg`);
+const source = path.resolve(arguments_.find(argument => !argument.startsWith('--')) || `release/distribution/One Key-${version}-arm64-notarized.dmg`);
 const isolated = await mkdtemp(path.join(tmpdir(), 'onelink-package-check-'));
 let mounted;
 const { stdout: policyStatus } = await execute('/usr/sbin/spctl', ['--status']).catch(error => {
@@ -39,21 +39,21 @@ try {
     await mkdir(mountpoint);
     await execute('/usr/bin/hdiutil', ['attach', '-readonly', '-nobrowse', '-mountpoint', mountpoint, source], { timeout: 30000 });
     mounted = mountpoint;
-    const payload = path.join(mounted, 'OneLinkAI.app');
+    const payload = path.join(mounted, 'One Key.app');
     await execute('/usr/bin/codesign', ['--verify', '--deep', '--strict', payload]);
     await launchThroughFinder(payload, 'Read-only DMG payload', 'disk-image-profile');
-    await execute('/usr/bin/ditto', [payload, path.join(isolated, 'OneLinkAI.app')]);
+    await execute('/usr/bin/ditto', [payload, path.join(isolated, 'One Key.app')]);
   } else if (source.endsWith('.app'))
-    await execute('/usr/bin/ditto', [source, path.join(isolated, 'OneLinkAI.app')]);
+    await execute('/usr/bin/ditto', [source, path.join(isolated, 'One Key.app')]);
   else
     await execute('/usr/bin/ditto', ['-x', '-k', source, isolated]);
-  const app = path.join(isolated, 'OneLinkAI.app');
+  const app = path.join(isolated, 'One Key.app');
   await execute('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
   const distributionPolicy = await execute('/usr/bin/syspolicy_check', ['distribution', app], { timeout: 120000 });
   console.log(`Apple pre-distribution assessment: ${(distributionPolicy.stdout + distributionPolicy.stderr).trim()}`);
   await execute('/usr/bin/xattr', ['-w', 'com.apple.quarantine', `0083;${Math.floor(Date.now() / 1000).toString(16)};OneLinkDistributionTest;`, app]);
   await launchThroughFinder(app, 'Extracted application with download quarantine', 'quarantined-profile');
-  let binary = path.join(app, 'Contents/MacOS/OneLinkAI');
+  let binary = path.join(app, 'Contents/MacOS/One Key');
   const { stdout: architecture } = await execute('/usr/bin/file', [binary]);
   const { stdout } = await execute(binary, ['--smoke-test', `--user-data-dir=${path.join(isolated, 'fresh-user-data')}`], {
     cwd: isolated,
@@ -65,9 +65,9 @@ try {
     throw new Error(`Packaged application did not pass startup checks: ${stdout}`);
   for (const phase of ['write', 'read']) {
     if (phase === 'read') {
-      const relocated = path.join(isolated, 'relocated/OneLinkAI.app');
+      const relocated = path.join(isolated, 'relocated/One Key.app');
       await execute('/usr/bin/ditto', [app, relocated]);
-      binary = path.join(relocated, 'Contents/MacOS/OneLinkAI');
+      binary = path.join(relocated, 'Contents/MacOS/One Key');
     }
     const { stdout: storageResult } = await execute(binary, ['--storage-self-test', `--user-data-dir=${path.join(isolated, 'storage-test-profile')}`], {
       cwd: isolated, env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: tmpdir() }, timeout: 15000,

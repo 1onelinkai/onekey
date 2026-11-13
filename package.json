@@ -1,10 +1,10 @@
 {
-  "name": "onelink-desktop-demo",
+  "name": "onekey",
   "private": true,
   "version": "0.3.2",
   "type": "module",
   "main": "electron/main.cjs",
-  "description": "OneLinkAI desktop client configuration demo",
+  "description": "Unified desktop manager for AI coding tools and model configuration",
   "author": "OneLinkAI",
   "scripts": {
     "test": "node --test electron/*.test.cjs",
@@ -51,7 +51,7 @@
   },
   "build": {
     "appId": "cloud.onelinkai.desktop",
-    "productName": "OneLinkAI",
+    "productName": "One Key",
     "directories": {
       "output": "release"
     },

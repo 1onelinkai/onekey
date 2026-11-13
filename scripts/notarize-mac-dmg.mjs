@@ -9,10 +9,10 @@ const { version } = require('../package.json');
 const profile = process.env.APPLE_KEYCHAIN_PROFILE;
 if (!profile) throw new Error('Set APPLE_KEYCHAIN_PROFILE before building a release.');
 
-const source = path.resolve(`release/OneLinkAI-${version}-arm64.dmg`);
-const output = path.resolve(`release/distribution/OneLinkAI-${version}-arm64-notarized.dmg`);
+const source = path.resolve(`release/One Key-${version}-arm64.dmg`);
+const output = path.resolve(`release/distribution/One Key-${version}-arm64-notarized.dmg`);
 const run = (command, args) => execFileSync(command, args, { stdio: 'inherit' });
-run('xcrun', ['stapler', 'validate', path.resolve('release/mac-arm64/OneLinkAI.app')]);
+run('xcrun', ['stapler', 'validate', path.resolve('release/mac-arm64/One Key.app')]);
 await mkdir(path.dirname(output), { recursive: true });
 await copyFile(source, output);
 run('codesign', ['--force', '--timestamp', '--sign', 'Developer ID Application: Shanghai Wanlian Easy Computing Technology Co., Ltd (7HHXUC392K)', '--identifier', 'cloud.onelinkai.desktop.dmg', output]);

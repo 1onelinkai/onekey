@@ -21,7 +21,7 @@ static NSString *SafeDetails(NSString *text) {
 }
 static void ReportFailure(NSString *detail, BOOL automated) {
   struct utsname machine; uname(&machine);
-  NSString *report = SafeDetails([NSString stringWithFormat:@"OneLinkAI %@\nmacOS %@\nArchitecture: %s\n%@\n", [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"unknown", [[NSProcessInfo processInfo] operatingSystemVersionString], machine.machine, detail]);
+  NSString *report = SafeDetails([NSString stringWithFormat:@"One Key %@\nmacOS %@\nArchitecture: %s\n%@\n", [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"unknown", [[NSProcessInfo processInfo] operatingSystemVersionString], machine.machine, detail]);
   fputs([report UTF8String], stderr);
   if (automated) return;
   NSString *logs = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/OneLinkAI"];
@@ -36,7 +36,7 @@ static void ReportFailure(NSString *detail, BOOL automated) {
   [NSApp activateIgnoringOtherApps:YES];
   NSAlert *alert = [[NSAlert alloc] init];
   alert.alertStyle = NSAlertStyleCritical;
-  alert.messageText = @"OneLinkAI 未能正常启动";
+  alert.messageText = @"One Key 未能正常启动";
   alert.informativeText = @"应用已记录具体错误。点击“复制错误详情”，可直接将错误信息发给技术支持。";
   [alert addButtonWithTitle:@"复制错误详情"];
   [alert addButtonWithTitle:@"关闭"];

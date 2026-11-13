@@ -104,7 +104,7 @@ const pages = {
 };
 const api = window.onelinkDesktop;
 async function invoke(method, value) {
-  if (!api) throw new Error("请在 OneLinkAI 桌面应用中操作");
+  if (!api) throw new Error("请在 One Key 桌面应用中操作");
   const r = await api[method](value);
   if (!r.ok) throw new Error(r.error);
   return r.data;
@@ -1233,7 +1233,7 @@ export default function DesktopApp() {
           <footer>
             <span>
               <Link2 size={13} />
-              OneLinkAI Desktop <SoftwareUpdate />
+              One Key <SoftwareUpdate />
             </span>
           </footer>
         </main>
@@ -1272,7 +1272,7 @@ export default function DesktopApp() {
               <div className="modal-eyebrow"><RefreshCw size={14} />手动更新</div>
               <h2>更新 {modal.client.name}</h2>
               <p>当前版本：{modal.client.version || '未读取'}{modal.update?.latestVersion ? ` · 最新版本：${modal.update.latestVersion}` : ''}</p>
-              <div className="notice">{modal.client.management?.reason || '当前安装不支持在 OneLinkAI 中一键更新，请通过客户端内置更新或原安装渠道更新。'}</div>
+              <div className="notice">{modal.client.management?.reason || '当前安装不支持在 One Key 中一键更新，请通过客户端内置更新或原安装渠道更新。'}</div>
               <p>打开客户端，在应用菜单或设置中检查更新；也可从官方下载并按原安装方式更新。</p>
               <div className="modal-actions">
                 <button className="button primary" disabled={!!busy} onClick={() => run('launch-update', async () => { const result = await invoke('launchAgent', modal.client.id); notify(result.message); })}>打开客户端<ExternalLink size={14} /></button>

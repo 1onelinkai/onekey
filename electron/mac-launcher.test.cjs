@@ -45,7 +45,7 @@ test('native launcher preserves failure code and redacts credentials in the fail
   const binary = await fixture('failure', 'printf "Library not loaded: fixture.dylib\\napi_key=sk-secret-fixture\\nAuthorization: Bearer token-fixture\\n" >&2\nexit 23\n');
   await assert.rejects(execute(binary, ['--smoke-test'], { timeout: 10000 }), error => {
     assert.equal(error.code, 23);
-    const report = error.stderr.slice(error.stderr.lastIndexOf('OneLinkAI test-version'));
+    const report = error.stderr.slice(error.stderr.lastIndexOf('One Key test-version'));
     assert.match(report, /Runtime exit: 23/);
     assert.match(report, /Library not loaded/);
     assert.match(report, /\[redacted\]/);

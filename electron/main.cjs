@@ -24,6 +24,14 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const { pathToFileURL } = require("node:url");
 
+// Keep existing user data when changing the public application name.
+const legacyData = path.join(app.getPath("appData"), "onelink-desktop-demo");
+const installedData = path.join(app.getPath("appData"), "OneLinkAI");
+if (!process.argv.some(arg => arg.startsWith('--user-data-dir'))) {
+  app.setPath("userData", fsSync.existsSync(installedData) ? installedData : legacyData);
+}
+app.setName("One Key");
+
 const smokeTest = process.argv.includes("--smoke-test");
 const flowTest = process.argv.includes("--flow-test");
 let testRoot;
@@ -60,15 +68,15 @@ function createTray() {
     icon = nativeImage.createFromPath(path.join(__dirname, "../build/icon.png"));
   }
   tray = new Tray(icon);
-  tray.setToolTip("OneLinkAI");
+  tray.setToolTip("One Key");
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "打开 OneLinkAI", click: showWindow },
+    { label: "打开 One Key", click: showWindow },
     { label: "检测客户端", click: () => {
       showWindow();
       mainWindow.webContents.send("onelink:scan");
     } },
     { type: "separator" },
-    { label: "退出 OneLinkAI", click: () => app.quit() },
+    { label: "退出 One Key", click: () => app.quit() },
   ]));
   tray.on("double-click", showWindow);
 }
@@ -100,7 +108,7 @@ function createWindow() {
     height: 720,
     minWidth: 800,
     minHeight: 600,
-    title: "OneLinkAI",
+    title: "One Key",
     icon: path.join(__dirname, process.platform === "darwin" ? "../build/icons/mac-icon.png" : "../build/icon.png"),
     backgroundColor: "#fafbfc",
     show: false,

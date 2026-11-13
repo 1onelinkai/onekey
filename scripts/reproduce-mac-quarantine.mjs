@@ -38,7 +38,7 @@ try {
     await mkdir(mountpoint);
     await execute('/usr/bin/hdiutil', ['attach', '-readonly', '-nobrowse', '-mountpoint', mountpoint, image]);
     mounted = mountpoint;
-    const app = path.join(mountpoint, 'OneLinkAI.app');
+    const app = path.join(mountpoint, 'One Key.app');
     const signature = await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
     const policy = await run('/usr/bin/syspolicy_check', ['distribution', app], 120000);
     const launch = async (target, phase) => {
@@ -50,7 +50,7 @@ try {
       return { ...request, rendered: /"rendered":\s*true/.test(runtimeOutput), runtimeOutput };
     };
     const fromDmg = await launch(app, 'dmg');
-    const extracted = path.join(root, `copied-${flags}`, 'OneLinkAI.app');
+    const extracted = path.join(root, `copied-${flags}`, 'One Key.app');
     await mkdir(path.dirname(extracted));
     await execute('/usr/bin/ditto', [app, extracted]);
     const inheritedQuarantine = await run('/usr/bin/xattr', ['-p', 'com.apple.quarantine', extracted]);
