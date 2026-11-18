@@ -277,3 +277,19 @@ test('DSH Desktop never queries or upgrades using the CLI npm package', async ()
   assert.equal(checked.status, 'unsupported'); assert.equal(checked.target, desktop.bundle);
   await assert.rejects(service.upgrade(desktop.id), /桌面版/);
 });
+
+test('Hermes capability inspection reuses the scanned item without another detection', async () => {
+  const item = { id: 'hermes', installed: true, executable: '/external/hermes', version: '0.22.5' };
+  const uninstaller = require('./uninstaller.cjs').createUninstaller({
+    detect: async () => assert.fail('capability inspection must not rescan'),
+    platform: 'linux', home: '/nonexistent-onekey-test-home',
+  });
+  const updates = createAgentUpdates({ detect: async () => assert.fail('describe must use supplied items'), installer: {},
+    system: { platform: 'linux', arch: 'x64' },
+    uninstallPlan: async (client, detected) => { assert.equal(client, 'hermes'); assert.equal(detected, item); return uninstaller.describe(detected); },
+    fetcher: async () => assert.fail('local detection must not query versions'),
+  });
+  const [result] = await updates.describe([item]);
+  assert.equal(result.installed, true);
+  assert.equal(result.management.upgradable, false);
+});

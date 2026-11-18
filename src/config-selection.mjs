@@ -5,7 +5,9 @@ export function parseConfigSource(value) {
 }
 
 export function selectAvailableModel(models, preferred = '') {
-  return (models.find(item => item.id === preferred) || models.find(item => item.isDefault) || models[0])?.id || '';
+  const visible = models.filter(item => item.showInSquare !== false);
+  if (preferred) return visible.find(item => item.id === preferred)?.id || '';
+  return (visible.find(item => item.isDefault) || visible[0])?.id || '';
 }
 
 export function configModelPresentation(config, client) {

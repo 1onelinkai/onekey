@@ -1,3 +1,4 @@
+const { fetchModelCatalog, searchModelCatalog } = require('./model-catalog.cjs');
 const API = 'https://api.onelinkai.cloud';
 const requestFields = require('../src/request-fields.json');
 const { keyMetadata } = require('./key-metadata.cjs');
@@ -185,16 +186,18 @@ function createLivePlatform({ fetcher = fetch, sessionStore } = {}) {
     if (!Array.isArray(result.data)) throw new Error('模型列表格式异常');
     let catalog = new Map();
     try {
-      const response = await fetcher(API + '/v1/public/models/grouped-by-month', { redirect: 'error', signal: AbortSignal.timeout(8000) });
-      if (response.ok) {
-        const directory = await response.json();
-        const groups = directory.data?.data;
-        if (Array.isArray(groups)) catalog = new Map(groups.flatMap(group => group.models || []).map(model => [model.modelId, model]));
-      }
+      catalog = new Map((await fetchModelCatalog({ fetcher })).map(model => [model.id, model]));
     } catch { /* Classification is optional; never replace the key's authorized model list. */ }
     return result.data.filter(model => typeof model.id === 'string').map(model => ({ id: model.id, name: model.name || catalog.get(model.id)?.name || model.id,
-      category: model.type || model.category || catalog.get(model.id)?.type || '其他', owner: model.owned_by || '' }));
+      category: model.type || model.category || catalog.get(model.id)?.category || '其他', owner: model.owned_by || '', ...((model.showInSquare === false || catalog.get(model.id)?.showInSquare === false) ? { showInSquare: false } : {}) }));
   }
+  async function searchModels({ keyId, query } = {}) {
+    if (typeof query !== 'string' || !query.trim() || query.length > 200) throw new Error('请输入有效的模型 ID');
+    // Validate the selected key, but never send its secret to the public catalog.
+    await get(keyId);
+    return searchModelCatalog(await fetchModelCatalog({ fetcher }), query);
+  }
+
   async function requestOptions({ org } = {}) {
     const args = await scope(org);
     const query = new URLSearchParams({ ...(!args.isAdmin ? { userId: String(args.userId) } : {}), ...(args.tenantId ? { tenantId: String(args.tenantId) } : {}) });
@@ -244,6 +247,6 @@ function createLivePlatform({ fetcher = fetch, sessionStore } = {}) {
     if (!data || typeof data !== 'object') throw new Error('日志详情格式异常');
     return logFields(data);
   }
-  return { status, acceptSession, logout, orgs, list, wallet, get, models, requests, requestOptions, requestDetail };
+  return { status, acceptSession, logout, orgs, list, wallet, get, models, searchModels, requests, requestOptions, requestDetail };
 }
 module.exports = { createLivePlatform };

@@ -9,6 +9,7 @@ const {
   nativeImage,
   net,
   dialog,
+  safeStorage,
   autoUpdater: nativeAutoUpdater,
 } = require("electron");
 const { createAgentService, testConnection } = require("./agents.cjs");
@@ -93,7 +94,7 @@ function openExternal(url) {
     const parsed = new URL(url);
     if (
       parsed.protocol === "https:" &&
-      ["www.onelinkai.cloud", "onelinkai.cloud", "zed.dev", "code.visualstudio.com", "zcode.z.ai", "www.codebuddy.ai", "github.com", "claude.ai", "claude.com"].includes(parsed.hostname)
+      ["www.onelinkai.cloud", "onelinkai.cloud", "zed.dev", "code.visualstudio.com", "zcode.z.ai", "www.workbuddy.cn", "www.deepseek.com", "git-scm.com", "github.com", "claude.ai", "claude.com"].includes(parsed.hostname)
     ) {
       shell.openExternal(parsed.href).catch(console.error);
     }
@@ -191,8 +192,10 @@ function createWindow() {
           .executeJavaScript(`(async () => {
           await new Promise(r=>setTimeout(r,500));
           let lastAction = 'start';
+          try {
           const wait = async fn => { for(let i=0;i<400;i++){const value=fn();if(value)return value;await new Promise(r=>setTimeout(r,50))}throw new Error('UI state timed out after '+lastAction+': '+document.body.innerText.slice(-2500)) };
           const click = async text => {const button=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')===text||b.getAttribute('title')===text||b.textContent.trim()===text);if(!button)throw new Error('Missing button '+text);if(button.disabled)throw new Error('Disabled button '+text);lastAction=text;button.click();await new Promise(r=>setTimeout(r,80))};
+          const setInput = (element, value) => { Object.getOwnPropertyDescriptor(element.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value').set.call(element, value); element.dispatchEvent(new Event('input', {bubbles:true})); };
           await wait(()=>document.querySelector('.app'));
           if ([...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='登录 OneLinkAI 账号')) await click('登录 OneLinkAI 账号');
           await wait(() => document.querySelector('.agent-management'));
@@ -237,14 +240,31 @@ function createWindow() {
           await click('API Keys');
           if([...document.querySelectorAll('button')].some(b=>b.textContent.includes('添加 API Key')))throw new Error('Manual key entry must not be offered');
           await wait(()=>document.querySelector('.table-actions button'));document.querySelector('.table-actions button').click();
-          await wait(()=>document.querySelector('.model-picker button') && [...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='预览配置'&&!b.disabled));
+          await wait(()=>document.querySelector('.model-picker button') && !document.querySelector('.model-loading'));
+          [...document.querySelectorAll('.client-picker button')].find(button => button.textContent.includes('Codex')).click();
+          await new Promise(resolve => setTimeout(resolve, 50));
+          if (document.querySelector('.model-picker button.picked')) throw new Error('Missing configured model must not select a replacement');
+          if (![...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='预览配置')?.disabled) throw new Error('Missing model must block preview');
           if(document.querySelector('input[type=password]'))throw new Error('Configuration asks for key again');
+          const modelSearch = document.querySelector('input[aria-label="搜索模型"]');
+          if (document.querySelector('.model-picker').textContent.includes('gpt-6.1-sol-k')) throw new Error('Hidden model displayed before search');
+          setInput(modelSearch, 'gpt-6.1-sol-k');
+          await wait(() => [...document.querySelectorAll('.model-picker button')].some(button => button.textContent.includes('OpenAI: GPT 6.1 SOL K')));
+          const hiddenModel = [...document.querySelectorAll('.model-picker button')].find(button => button.textContent.includes('OpenAI: GPT 6.1 SOL K'));
+          hiddenModel.click(); await new Promise(resolve => setTimeout(resolve, 50));
+          if (!document.querySelector('.config-selection-summary').textContent.includes('gpt-6.1-sol-k')) throw new Error('Hidden search result cannot be selected');
+          setInput(modelSearch, '');
+          await wait(() => !document.querySelector('.model-picker').textContent.includes('OpenAI: GPT 6.1 SOL K'));
+
           const sourceSelect = document.querySelector('select[aria-label="配置来源"]');
           const secondKey = [...sourceSelect.options].filter(option => option.value.startsWith('key:'))[1];
           if (!secondKey) throw new Error('Missing second key fixture');
           Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sourceSelect, secondKey.value);
           sourceSelect.dispatchEvent(new Event('change', { bubbles: true }));
-          await wait(() => document.querySelector('.model-picker button.picked') && !document.querySelector('.model-loading'));
+          await wait(() => document.querySelector('.model-picker button') && !document.querySelector('.model-loading'));
+          if (document.querySelector('.model-picker button.picked')) throw new Error('Hidden model must not select a replacement when switching sources');
+          document.querySelector('.model-picker button').click();
+          await wait(() => document.querySelector('.model-picker button.picked'));
           if (document.querySelector('.model-picker').textContent.includes('密钥列表已失效')) throw new Error('Switching keys invalidates the model list');
           await click('预览配置');
           await wait(()=>[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='确认写入'));await click('确认写入');
@@ -259,22 +279,95 @@ function createWindow() {
           await click('返回'); await click('确认恢复');
           await wait(()=>document.querySelector('.data-table .pill')?.textContent==='已恢复');
           await click('请求记录');await wait(()=>document.querySelector('.request-empty'));
+          await wait(()=>document.querySelector('button[aria-label="全部用户"]'));
+          if (document.querySelector('.request-filters select, .request-filters input[type="datetime-local"]')) throw new Error('Request filters must use custom controls');
+          document.querySelector('button[aria-label="全部模型"]').click();
+          await wait(()=>document.querySelector('.request-filter-popover:popover-open input'));
+          setInput(document.querySelector('.request-filter-popover:popover-open input'), 'no-match');
+          await wait(()=>document.querySelector('.request-filter-empty'));
+          setInput(document.querySelector('.request-filter-popover:popover-open input'), 'GPT-REQUEST-TEST');
+          await wait(()=>document.querySelectorAll('.request-filter-popover:popover-open [role="option"]').length===1);
+          document.querySelector('.request-filter-popover:popover-open input').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true}));
+          await wait(()=>document.querySelector('button[aria-label="全部模型"]').textContent.includes('Request model'));
+          document.querySelector('button[aria-label="请求时间范围"]').click();
+          await wait(()=>document.querySelector('.request-range-popover:popover-open'));
+          await click('今天');
+          await new Promise(r=>setTimeout(r,30));
+          setInput(document.querySelector('input[aria-label="范围开始时刻"]'), '20:00');
+          setInput(document.querySelector('input[aria-label="范围结束时刻"]'), '10:00');
+          await wait(()=>document.querySelector('.range-confirm').disabled);
+          setInput(document.querySelector('input[aria-label="范围结束时刻"]'), '23:59');
+          await wait(()=>!document.querySelector('.range-confirm').disabled);
+          await click('确定范围');
+          await wait(()=>document.querySelector('.request-range-trigger').textContent.includes('20:00'));
+          const savedRange = document.querySelector('.request-range-trigger').textContent;
+          document.querySelector('.request-range-trigger').click();
+          await wait(()=>document.querySelector('.request-range-popover:popover-open'));
+          await click('近 7 天'); await click('取消');
+          if(document.querySelector('.request-range-trigger').textContent!==savedRange) throw new Error('Cancelling must preserve committed range');
+          document.querySelector('.request-range-trigger').click();
+          await wait(()=>document.querySelector('.request-range-popover:popover-open'));
+          const rangeDays = document.querySelectorAll('.request-range-days button');
+          rangeDays[12].click(); await new Promise(r=>setTimeout(r,30)); rangeDays[5].click();
+          await wait(()=>!document.querySelector('.range-confirm').disabled);
+          await click('确定范围');
+          document.querySelector('button[aria-label="重置筛选"]').click();
+          await wait(()=>document.querySelector('.request-range-trigger').textContent.includes('选择时间范围'));
+          if(!document.querySelector('button[aria-label="全部模型"]').textContent.includes('全部模型')) throw new Error('Reset must clear model filter');
+
           const invoke = async (name, input) => { const r = await window.onelinkDesktop[name](input); if(!r.ok) throw new Error(r.error); return r.data; };
-          const provider = await invoke('createLocalProvider', { name: 'Flow provider', baseURL: 'http://127.0.0.1:${modelServer?.address()?.port}', protocol: 'anthropic', apiKey: 'flow-test-secret' });
-          await click('模型服务商'); await click('刷新');
-          await wait(()=>document.querySelector('.provider-summary strong')?.textContent==='Flow provider');
+
+          await click('模型服务商');
+          if (document.querySelector('.provider-fields')) throw new Error('Provider form must not occupy the list page');
+          await click('添加服务商');
+          await wait(() => document.querySelector('.provider-editor-modal'));
+          if (document.activeElement !== document.querySelector('.provider-fields input')) throw new Error('Provider name must receive initial focus');
+          if (document.querySelector('.provider-optional').open) throw new Error('Optional provider fields must start collapsed');
+          setInput(document.querySelector('.provider-fields input'), 'Discarded draft');
+          setInput(document.querySelector('.provider-fields input[type="password"]'), 'discarded-secret');
+          document.querySelector('.provider-optional summary').click();
+          await new Promise(r=>setTimeout(r,50));
+          await click('取消');
+          await wait(() => !document.querySelector('.provider-editor-modal'));
+          if ((await invoke('localProviders')).length) throw new Error('Cancel must not create a provider');
+          await click('添加服务商');
+          await wait(() => document.querySelector('.provider-editor-modal'));
+          if (document.querySelector('.provider-fields input').value || document.querySelector('.provider-fields input[type="password"]').value || document.querySelector('.provider-optional').open) throw new Error('New provider dialog retained a cancelled draft');
+          const saveButton = document.querySelector('.provider-editor-footer button[type="submit"]');
+          setInput(document.querySelector('.provider-fields input'), 'Flow provider');
+          setInput(document.querySelector('.provider-fields input[type="url"]'), 'http://127.0.0.1:${modelServer?.address()?.port}');
+          setInput(document.querySelector('.provider-fields input[type="password"]'), 'flow-test-secret');
+          Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(document.querySelector('.provider-fields select'), 'anthropic');
+          document.querySelector('.provider-fields select').dispatchEvent(new Event('change', { bubbles:true }));
+          await new Promise(r=>setTimeout(r,50));
+          document.querySelectorAll('.provider-editor-modal .protocol-choices input:not(:checked)').forEach(input => input.click());
+          await new Promise(r=>setTimeout(r,50));
+          saveButton.focus(); document.dispatchEvent(new KeyboardEvent('keydown', { key:'Tab', bubbles:true, cancelable:true }));
+          if (document.activeElement !== document.querySelector('.modal-close')) throw new Error('Provider dialog must contain keyboard focus');
+          await click('保存服务商');
+          await wait(() => document.querySelector('.provider-summary strong')?.textContent === 'Flow provider');
+          if (document.querySelector('.provider-editor-modal')) throw new Error('Saved provider dialog must close');
+          const provider = (await invoke('localProviders'))[0];
           await click('编辑');
-          const setInput = (element, value) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(element, value); element.dispatchEvent(new Event('input', {bubbles:true})); };
+          await wait(() => document.querySelector('.provider-editor-modal'));
+          if (document.querySelector('.provider-fields input[type="password"]').value) throw new Error('Editing provider must not expose its saved credential');
+          document.querySelector('.provider-optional summary').click();
           setInput(document.querySelector('.provider-fields input'), 'Edited provider');
           setInput(document.querySelector('input[placeholder="例如 工作账号、备用线路"]'), 'Shared account');
           setInput(document.querySelector('input[placeholder="https://example.com"]'), 'https://example.com/account');
           await new Promise(r=>setTimeout(r,50));
-          await click('保存模型服务商');
+          await click('保存服务商');
           await wait(()=>document.querySelector('.provider-summary strong')?.textContent==='Edited provider');
           if(document.querySelector('.provider-notes')?.textContent!=='Shared account') throw new Error('Provider notes missing');
           if(document.querySelector('.provider-website')?.title!=='https://example.com/account') throw new Error('Provider website missing');
+          await click('编辑');
+          await wait(() => document.querySelector('.provider-editor-modal'));
+          if (!document.querySelector('.provider-optional').open) throw new Error('Existing provider details must be expanded when editing');
+          document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true, cancelable:true}));
+          await wait(() => !document.querySelector('.provider-editor-modal'));
+
           await click('一键拉取模型'); await wait(()=>document.querySelector('.model-import-row'));
-          if (document.querySelector('.provider-models .pill')) throw new Error('Fetch must not import automatically');
+          if (document.querySelector('.provider-model-row')) throw new Error('Fetch must not import automatically');
           const importSearch = document.querySelector('input[aria-label="搜索待选模型"]');
           setInput(importSearch, 'no-matching-model'); await new Promise(resolve => setTimeout(resolve, 50));
           if (document.querySelector('.model-import-row')) throw new Error('Model import search did not filter');
@@ -283,27 +376,44 @@ function createWindow() {
           await click('全选当前结果');
           if (!document.querySelector('.model-import-row input').checked) throw new Error('Filtered selection failed');
           await click('取消');
-          if (document.querySelector('.provider-models .pill')) throw new Error('Cancel changed saved models');
+          if (document.querySelector('.provider-model-row')) throw new Error('Cancel changed saved models');
           await click('一键拉取模型'); await wait(()=>document.querySelector('.model-import-row'));
           if (document.querySelector('.model-import-row input').checked) throw new Error('New models must not be preselected');
           document.querySelector('.model-import-row input').click();
-          await click('确认选择'); await wait(()=>document.querySelector('.provider-models .pill'));
-          await click('默认'); await wait(()=>document.querySelector('.provider-models .pill.success'));
+          await click('确认选择'); await wait(()=>document.querySelector('.provider-model-row'));
+          await click('停用模型'); await wait(() => document.querySelector('.provider-model-row.is-disabled'));
+          if (!document.querySelector('.provider-model-row .model-default-button').disabled) throw new Error('Disabled models must not become default');
+          await click('启用模型'); await wait(() => !document.querySelector('.provider-model-row.is-disabled'));
+          await click('设为默认'); await wait(()=>document.querySelector('.provider-model-row.is-default'));
+          if (document.querySelector('.provider-model-status').textContent !== '默认模型') throw new Error('Default model status is missing');
+          if (!document.querySelector('.provider-model-row .model-default-button').disabled) throw new Error('Current default action must be disabled');
+          await click('一键配置'); await wait(()=>document.querySelector('.client-picker'));
+          document.querySelector('.client-picker button[title="Codex"]').click();
+          await wait(()=>document.querySelector('#protocol')?.value === '');
+          if (![...document.querySelectorAll('button')].find(button => button.textContent.trim() === '预览配置')?.disabled) throw new Error('Incompatible model must block preview');
+          const incompatible = await window.onelinkDesktop.preview({ providerId: provider.id, client: 'codex', model: 'claude-sonnet-flow-test', protocol: 'responses' });
+          if (incompatible.ok || !incompatible.error.includes('不支持')) throw new Error('IPC must reject unsupported model protocol');
+          await click('关闭');
           await click('编辑模型资料'); await wait(()=>document.querySelector('input[aria-label="模型显示名称"]'));
+          document.querySelectorAll('.model-settings-editor .protocol-choices input:not(:checked)').forEach(input => input.click());
           setInput(document.querySelector('input[aria-label="模型显示名称"]'), 'Renamed model');
           setInput(document.querySelector('.model-settings-editor input[aria-label="上下文窗口"]'), '256000');
           setInput(document.querySelector('.model-settings-editor input[aria-label="最大输出 Token"]'), '16000');
           await new Promise(r=>setTimeout(r,50)); await click('保存模型参数');
-          await wait(()=>document.querySelector('.provider-models .pill')?.textContent.includes('Renamed model'));
+          await wait(()=>document.querySelector('.provider-model-row')?.textContent.includes('Renamed model'));
           await click('一键配置'); await wait(()=>document.querySelector('.model-picker button') && [...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='预览配置'&&!b.disabled));
-          if (document.querySelector('#protocol')?.value !== 'anthropic') throw new Error('Provider protocol not selected');
-          await click('刷新模型'); await wait(()=>!document.querySelector('.model-label button')?.disabled);
+          if (!document.querySelector('#protocol')?.value || document.querySelector('#protocol option:checked')?.disabled) throw new Error('Compatible model protocol not selected');
+          document.querySelector('button[aria-label="刷新模型"]').click(); await new Promise(resolve => setTimeout(resolve, 50)); await wait(()=>!document.querySelector('button[aria-label="刷新模型"]')?.disabled);
           if (!document.querySelector('.model-picker button')?.textContent.includes('Renamed model')) throw new Error('Model sync discarded local name');
           const savedModels = await invoke('localModels');
           const savedModel = savedModels.find(model => model.providerId === provider.id);
           if(savedModel.contextWindow!==256000 || savedModel.maxTokens!==16000) throw new Error('Model sync discarded limits');
           document.querySelector('.client-picker button[title="Claude Code"]').click();
           await new Promise(resolve => setTimeout(resolve, 50));
+          if (!document.querySelector('.model-picker button.picked')) {
+            document.querySelector('.model-picker button').click();
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
           document.querySelector('.configuration-advanced').open = true;
           setInput(document.querySelector('.configuration-advanced input[aria-label="最大输出 Token"]'), '12000');
           await new Promise(resolve => setTimeout(resolve, 50));
@@ -316,7 +426,14 @@ function createWindow() {
           const advanced = await invoke('preview', { providerId: provider.id, model: savedModel.id, client: 'codex', protocol: 'responses' });
           if(!advanced.files[0].content.replaceAll('_', '').includes('modelcontextwindow = 256000')) throw new Error('Shared model context not passed through IPC');
           if(!advanced.notice.includes('最大输出 Token')) throw new Error('Unsupported settings must be explained');
-          await click('预览配置'); await wait(()=>document.querySelector('.preview-code'));
+          await click('预览配置'); await wait(()=>document.querySelector('.preview-editor'));
+          if (document.querySelector('.preview-editor').readOnly || document.querySelector('.preview-editor').disabled) throw new Error('Preview must be directly editable');
+          const editable = document.querySelector('.preview-editor');
+          const edited = JSON.parse(editable.value); edited.onekey_preview_test = true;
+          setInput(editable, JSON.stringify(edited, null, 2));
+          await click('查看高亮'); await wait(()=>document.querySelector('.preview-code')?.textContent.includes('onekey_preview_test'));
+          await click('还原此文件');
+          await wait(()=>!document.querySelector('.preview-code')?.textContent.includes('onekey_preview_test'));
           const dialog = document.querySelector('.configure-workflow');
           const bounds = dialog.getBoundingClientRect();
           const footer = document.querySelector('.config-workspace-footer').getBoundingClientRect();
@@ -344,10 +461,18 @@ function createWindow() {
             const button = [...document.querySelectorAll('.client-picker button')].find(button => button.title === name);
             if (!button || button.disabled) throw new Error('Application not selectable: ' + name);
             button.click(); await new Promise(resolve => setTimeout(resolve, 50));
+            if (!document.querySelector('.model-picker button.picked')) {
+              document.querySelector('.model-picker button').click();
+              await new Promise(resolve => setTimeout(resolve, 50));
+            }
             setSelect(document.querySelector('#protocol'), protocol); await new Promise(resolve => setTimeout(resolve, 50));
             if (id === 'deepseek-harness') {
               const profileInput = document.querySelector('input[aria-label="DSH CLI Profile"]');
               if (!profileInput || profileInput.value !== 'web') throw new Error('DSH CLI must default to web profile');
+              if (!profileInput.closest('.config-details-column') || profileInput.closest('.config-controls')) throw new Error('DSH CLI profile must stay in advanced settings');
+              const label = profileInput.closest('label').querySelector('span').getBoundingClientRect();
+              const field = profileInput.getBoundingClientRect();
+              if (field.top < label.bottom || field.width > profileInput.closest('.configuration-advanced').clientWidth) throw new Error('DSH profile layout overlaps or overflows');
               setInput(profileInput, 'flow-custom');
               await new Promise(resolve => setTimeout(resolve, 50));
             }
@@ -362,10 +487,12 @@ function createWindow() {
             if (effort) setSelect(effort, 'high');
             await new Promise(resolve => setTimeout(resolve, 50));
             await click('预览配置');
-            await wait(() => document.querySelector('.preview-code'));
+            await wait(() => document.querySelector('.preview-editor') || document.querySelector('.preview-code'));
+            if (document.querySelector('.preview-editor')) await click('查看高亮');
             let preview = '';
             for (const fileTab of document.querySelectorAll('.preview-file-tabs button')) {
               fileTab.click(); await new Promise(resolve => setTimeout(resolve, 30));
+              if (document.querySelector('.preview-editor')) await click('查看高亮');
               preview += document.querySelector('.preview-code').textContent;
             }
             if (!document.querySelector('.preview-code [class*=hljs-]')) throw new Error('Missing preview highlighting: ' + name);
@@ -378,16 +505,25 @@ function createWindow() {
           }
           if (verifiedClients.length !== 16) throw new Error('Incomplete application coverage');
           await click('概览');await wait(()=>document.querySelector('.overview-stats'));
+          const launchSelect = document.querySelector('select[aria-label="运行 Codex"]');
+          if (!launchSelect || launchSelect.disabled || !launchSelect.querySelector('option[value="cli"]') || !launchSelect.querySelector('option[value="desktop"]')) throw new Error('Codex must offer launch targets directly in a dropdown');
+          for (const target of ['desktop', 'cli']) {
+            setSelect(launchSelect, target);
+            await wait(() => !launchSelect.disabled);
+            if (document.querySelector('[role=dialog]')) throw new Error('Launching must not open a choice dialog');
+          }
+
           for (const [name, message] of [['DeepSeek Harness CLI', 'DSH CLI'], ['DeepSeek Harness Desktop', '桌面应用']]) {
             const launch = document.querySelector('button[aria-label="运行 ' + name + '"]');
             if (!launch || launch.disabled) throw new Error('Missing launch button: ' + name);
             launch.click();
             await wait(() => document.querySelector('.toast')?.textContent.includes(message));
           }
-          await click('模型服务商'); await click('刷新'); await wait(()=>document.querySelector('.provider-models .pill'));
+          await click('模型服务商'); await click('刷新'); await wait(()=>document.querySelector('.provider-model-row'));
           await click('编辑模型资料'); await wait(()=>document.querySelector('.model-settings-editor'));
           document.querySelector('.model-settings-editor').scrollIntoView({block:'start'});
           return {uiFlow:true, automaticBackgroundUpdates:true, installationCapabilitiesVisible:true, compactManagementTooltip:true, localConfigReader:true, providerEditSyncDefaultAndConfig:true, sharedModelLimitsAndCapabilities:true, allApplicationControls:verifiedClients, platformKeyReused:true, modelsFetched:true, history:await window.onelinkDesktop.history()};
+          } catch (error) { throw new Error(lastAction + ': ' + error.stack); }
         })()`);
         if (!agentLaunchRequests.some(value => value.kind === 'terminal') || !agentLaunchRequests.some(value => value.kind === 'desktop' && value.target.endsWith('DeepSeek Harness.app')))
           throw new Error('Agent launch IPC did not reach the expected terminal and desktop targets');
@@ -432,6 +568,17 @@ function createWindow() {
         })()`);
         await new Promise(resolve => setTimeout(resolve, 300));
         await fs.writeFile(path.join(__dirname, '../artifacts/config-workspace.png'), (await mainWindow.webContents.capturePage()).toPNG());
+        await mainWindow.webContents.executeJavaScript(`(async () => {
+          document.querySelector('.client-picker button[title="DeepSeek Harness CLI"]').click();
+          const query = document.querySelector('input[aria-label="搜索模型"]');
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(query, 'no-matching-model-layout-check');
+          query.dispatchEvent(new Event('input', { bubbles: true }));
+          for (let i = 0; i < 100 && !document.querySelector('.model-picker-empty'); i++) await new Promise(resolve => setTimeout(resolve, 50));
+          const empty = document.querySelector('.model-picker-empty');
+          if (!empty?.closest('.model-picker') || document.querySelector('.config-model-layout > .inline-empty')) throw new Error('Empty model message must stay inside the list');
+        })()`);
+        await new Promise(resolve => setTimeout(resolve, 300));
+        await fs.writeFile(path.join(__dirname, '../artifacts/dsh-config-workspace.png'), (await mainWindow.webContents.capturePage()).toPNG());
         await mainWindow.webContents.executeJavaScript(`document.querySelector('.modal-close').click()`);
         await mainWindow.webContents.executeJavaScript(`(async () => {
           [...document.querySelectorAll('button')].find(button => button.textContent.trim() === '概览').click();
@@ -506,6 +653,17 @@ function createWindow() {
         await new Promise(resolve => setTimeout(resolve, 200));
         const configScreenshot = await mainWindow.webContents.capturePage();
         await fs.writeFile(path.join(__dirname, '../artifacts/local-config-reader.png'), configScreenshot.toPNG());
+        await mainWindow.webContents.executeJavaScript(`(async () => {
+          document.querySelector('.modal-close')?.click();
+          [...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='请求记录').click();
+          for(let i=0;i<100&&!document.querySelector('.request-range-trigger');i++) await new Promise(r=>setTimeout(r,50));
+          document.querySelector('.request-range-trigger').click();
+        })()`);
+        await new Promise(resolve => setTimeout(resolve, 200));
+        await fs.writeFile(path.join(__dirname, '../artifacts/request-range.png'), (await mainWindow.webContents.capturePage()).toPNG());
+        await mainWindow.webContents.executeJavaScript(`document.querySelector('button[aria-label="全部模型"]').click()`);
+        await new Promise(resolve => setTimeout(resolve, 200));
+        await fs.writeFile(path.join(__dirname, '../artifacts/request-search.png'), (await mainWindow.webContents.capturePage()).toPNG());
         clearTimeout(timer);
         await fs.rm(testRoot, { recursive: true, force: true });
         modelServer?.close();
@@ -578,7 +736,17 @@ app.whenReady().then(async () => {
   });
   let testOptions = {};
   if (flowTest) {
-    modelServer=require('node:http').createServer((req,res)=>{res.setHeader('Content-Type','application/json');res.end(JSON.stringify({data:[{id:'claude-sonnet-flow-test',owned_by:'test'}]}))});
+    modelServer=require('node:http').createServer((req,res)=>{
+      res.setHeader('Content-Type','application/json');
+      if (req.url === '/v1/public/models/grouped-by-month') {
+        res.end(JSON.stringify({ code: 0, data: { data: [{ month: '2026-11', models: [
+          { modelId: 'claude-sonnet-flow-test', name: 'Flow model', type: '文本模型', showInSquare: true },
+          { modelId: 'gpt-6.1-sol-k', name: 'OpenAI: GPT 6.1 SOL K', type: '文本模型', showInSquare: false },
+        ] }] } }));
+      } else if (req.url.startsWith('/api/v1/models')) {
+        res.end(JSON.stringify({ code: 0, data: { models: [] } }));
+      } else res.end(JSON.stringify({data:[{id:'claude-sonnet-flow-test',owned_by:'test'}]}));
+    });
     await new Promise(resolve=>modelServer.listen(0,'127.0.0.1',resolve));
     testRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), "onelink-electron-flow-"),
@@ -596,6 +764,8 @@ app.whenReady().then(async () => {
     await fs.writeFile(path.join(testRoot, '.codex/config.toml'), 'model = "local-config-flow"\nmodel_context_window = 128000\n[model_providers.custom]\nbase_url = "https://example.com/v1"\nexperimental_bearer_token = "reader-private-fixture"\n');
     await fs.writeFile(path.join(testRoot, '.codex/auth.json'), '{"token":"reader-auth-private-fixture"}');
     await fs.mkdir(path.join(testRoot, "Applications/DeepSeek Harness.app"), { recursive: true });
+    await fs.mkdir(path.join(testRoot, 'Applications/Codex.app/Contents'), { recursive: true });
+    await fs.writeFile(path.join(testRoot, 'Applications/Codex.app/Contents/Info.plist'), '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.openai.codex</string><key>CFBundleShortVersionString</key><string>1.0.0</string></dict></plist>');
     testOptions = {
       home: testRoot,
       env: { PATH: bin },
@@ -613,6 +783,9 @@ app.whenReady().then(async () => {
     directories: [path.join(app.getPath('appData'), 'ZCode/session')],
   });
   const agents = createAgentService({
+    ...(!flowTest && process.platform === 'darwin' ? {
+      credentials: require('./credentials.cjs').macCredentials(safeStorage),
+    } : {}),
     ...(!flowTest ? { readClientSelection: (client, directory) => {
       if (client === 'workbuddy') return workbuddySelection();
       if (client === 'zcode') return zcodeSelection();
@@ -645,7 +818,7 @@ app.whenReady().then(async () => {
   const uninstaller = createUninstaller({ detect: () => agents.detect(), trashItem: value => shell.trashItem(value),
     execute: require('node:util').promisify(require('node:child_process').execFile) });
   const updates = require('./agent-updates.cjs').createAgentUpdates({ detect: () => agents.detect(), installer,
-    uninstallPlan: client => uninstaller.plan(client), fetcher: (url, options) => {
+    uninstallPlan: (client, item) => item ? uninstaller.describe(item) : uninstaller.plan(client), fetcher: (url, options) => {
       if (flowTest) return Promise.reject(new Error('流程测试：版本服务暂时不可用'));
       return net.fetch(url, options);
     } });
@@ -655,7 +828,7 @@ app.whenReady().then(async () => {
       const savedModel = provider.models.find(model => model.id === input.model && model.enabled);
       if (!savedModel) throw new Error('请选择此服务商已启用的模型');
       const modelSettings = input.modelSettings === undefined ? savedModel : { name: savedModel.name, ...input.modelSettings };
-      return { client: input.client, model: input.model, protocol: input.protocol || provider.protocol, apiKey: provider.apiKey, baseURL: provider.baseURL, modelSettings, dshProfile: input.dshProfile };
+      return { client: input.client, model: input.model, protocol: require('./provider-protocols.cjs').resolveModelProtocol(provider, savedModel, input.protocol), apiKey: provider.apiKey, baseURL: provider.baseURL, modelSettings, dshProfile: input.dshProfile };
     }
     const key = await keyStore.get(input?.keyId);
     return {
@@ -707,6 +880,7 @@ app.whenReady().then(async () => {
     keys: (org) => keyStore.list(org),
     wallet: (org) => keyStore.wallet(org),
     models: (id) => keyStore.models(id),
+    "search-models": input => keyStore.searchModels(input),
     localProviders: () => localProviders.listProviders(),
     openLocalProviderWebsite: async input => {
       const provider = (await localProviders.listProviders()).find(item => item.id === input?.id);
@@ -722,7 +896,9 @@ app.whenReady().then(async () => {
     localModels: () => localProviders.listModels(),
     fetchLocalModels: async input => {
       const provider = await localProviders.getCredential(input.providerId);
-      const models = await require('./provider-models.cjs').fetchProviderModels(provider, net.fetch.bind(net));
+      const protocol = input.protocol || provider.protocol;
+      if (!require('./provider-protocols.cjs').providerProtocols(provider).includes(protocol)) throw new Error('服务商不支持所选拉取协议');
+      const models = (await require('./provider-models.cjs').fetchProviderModels({ ...provider, protocol }, net.fetch.bind(net))).map(model => ({ ...model, protocols: [protocol] }));
       return models;
     },
     selectLocalModels: input => localProviders.selectModels(input.providerId, input.models),
@@ -731,7 +907,7 @@ app.whenReady().then(async () => {
     deleteLocalModel: input => localProviders.deleteModel(input.providerId, input.id),
     setDefaultLocalModel: input => localProviders.setDefaultModel(input.providerId, input.modelId),
     requests: (query) => flowTest ? { connected: true, items: [], total: 0 } : keyStore.requests(query),
-    "request-options": (query) => flowTest ? { models: [], suppliers: [], types: [] } : keyStore.requestOptions(query),
+    "request-options": (query) => flowTest ? { models: [{ value: "gpt-request-test", label: "Request model" }], users: [{ value: "flow-user", label: "Test user" }], suppliers: [{ value: "flow-supplier", label: "Test supplier" }], types: [{ value: "text", label: "文本" }] } : keyStore.requestOptions(query),
     "request-detail": (query) => flowTest ? {} : keyStore.requestDetail(query),
   })) {
     ipcMain.handle("onelink:" + channel, async (event, input) => {

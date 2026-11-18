@@ -1,3 +1,4 @@
+import { filterModels } from "./model-visibility.mjs";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Link2,
@@ -30,7 +31,7 @@ import {
   Filter,
   Pencil,
   FileCode2,
-  Play,
+  Plus,
 } from "lucide-react";
 import "./desktop.css";
 import "./soft-theme.css";
@@ -40,12 +41,16 @@ import clientCapabilities from "./client-capabilities.json";
 import clientSettingNotes from "./client-setting-notes.json";
 import ModelSettingsFields from "./ModelSettingsFields.jsx";
 import ModelImportDialog from "./ModelImportDialog.jsx";
+import ProviderEditorDialog from "./ProviderEditorDialog.jsx";
+import ProtocolChoices, { protocolOptions, clientProtocols } from "./ProtocolChoices.jsx";
+import ProviderModelList from "./ProviderModelList.jsx";
 import ClientConfigViewer from "./ClientConfigViewer.jsx";
 import ConfigCode from "./ConfigCode.jsx";
 import AgentCardMenu from "./AgentCardMenu.jsx";
+import AgentLaunchButton from "./AgentLaunchButton.jsx";
 import AgentDetailsTooltip from "./AgentDetailsTooltip.jsx";
 import SoftwareUpdate from "./SoftwareUpdate.jsx";
-const emptyProvider = () => ({ name: "", baseURL: "https://api.openai.com", protocol: "openai", apiKey: "", notes: "", website: "" });
+import { SearchFilter, RequestDateRange } from "./RequestFilters.jsx";
 const emptyModel = () => ({ id: "", name: "", contextWindow: "", maxTokens: "", supportsImages: "", supportsTools: "", supportsReasoning: "" });
 import brandSymbol from "./assets/brand/onelink-symbol.png";
 import brandWordmark from "./assets/brand/onelink-wordmark.png";
@@ -201,11 +206,13 @@ export default function DesktopApp() {
   const [localProviders, setLocalProviders] = useState([]),
     [localModels, setLocalModels] = useState([]),
     [providerId, setProviderId] = useState(""),
-    [providerDraft, setProviderDraft] = useState(emptyProvider),
     [modelDraft, setModelDraft] = useState(emptyModel);
   const [modelOverrides, setModelOverrides] = useState({});
   const [configPane, setConfigPane] = useState('local');
   const [previewPath, setPreviewPath] = useState('');
+  const [previewEdits, setPreviewEdits] = useState({});
+  const [editingPreview, setEditingPreview] = useState(true);
+  useEffect(() => { setPreviewEdits({}); setEditingPreview(true); }, [plan?.token]);
   const [dshProfile, setDshProfile] = useState('web');
   useEffect(() => { setPlan(null); setTested(false); }, [clientId, model, protocol, activeKey, providerId, modelOverrides, dshProfile]);
   const returningModelOverrides = useRef(null);
@@ -217,7 +224,6 @@ export default function DesktopApp() {
     }
   }, [plan, configPane]);
   useEffect(() => { setModelOverrides(returningModelOverrides.current || {}); returningModelOverrides.current = null; }, [model, clientId, providerId, activeKey, modal?.type]);
-  const [editingProvider, setEditingProvider] = useState("");
   const [editingModel, setEditingModel] = useState(null);
   const [requestSummary, setRequestSummary] = useState(null);
   const [requestError, setRequestError] = useState("");
@@ -228,10 +234,26 @@ export default function DesktopApp() {
   const loadId = useRef(0),
     orgId = useRef(0);
   const orgName = organizations.find(item => item.id === org)?.name || "选择组织";
-  const modelCategories = ["全部", ...new Set(models.map(item => item.category || "其他"))];
-  const filteredModels = models.filter(item =>
-    (modelCategory === "全部" || (item.category || "其他") === modelCategory) &&
-    (item.id + item.name).toLowerCase().includes(modelQuery.toLowerCase()));
+  const modelCategories = ["全部", ...new Set(models.filter(item => item.showInSquare !== false).map(item => item.category || "其他"))];
+  const [modelSearch, setModelSearch] = useState(null);
+  const searchQuery = modelQuery.trim();
+  const currentSearch = modelSearch?.key === activeKey && modelSearch?.query === searchQuery ? modelSearch : null;
+  const searchModels = new Map(models.map(item => [item.id, item]));
+  for (const item of currentSearch?.items || []) if (!searchModels.has(item.id)) searchModels.set(item.id, { ...item, showInSquare: false });
+  const filteredModels = filterModels([...searchModels.values()], modelQuery, modelCategory);
+  useEffect(() => {
+    if (modal?.type !== 'configure' || !activeKey || !searchQuery) { setModelSearch(null); return; }
+    let active = true;
+    setModelSearch({ key: activeKey, query: searchQuery, loading: true, items: [] });
+    const timer = setTimeout(() => {
+      invoke('searchModels', { keyId: activeKey, query: searchQuery }).then(items => {
+        if (active) setModelSearch({ key: activeKey, query: searchQuery, items });
+      }).catch(error => {
+        if (active) setModelSearch({ key: activeKey, query: searchQuery, items: [], error: error.message });
+      });
+    }, 300);
+    return () => { active = false; clearTimeout(timer); };
+  }, [modal?.type, activeKey, searchQuery]);
   async function acceptAccount(status) {
     setAccount(status);
     setLogged(!!status.authenticated);
@@ -287,7 +309,7 @@ export default function DesktopApp() {
   }
   async function openInstall(client, update = false) {
     setInstallPlan(null);
-    if (installation?.client !== client.id || !installation?.running) setInstallation(null);
+    if (!installation?.running) setInstallation(null);
     setError("");
     setModal({ type: "install", client, update });
     await run("install-plan", async () => {
@@ -429,11 +451,7 @@ export default function DesktopApp() {
     const preferred = id === "gemini" ? "gemini"
       : ["claude", "claude-desktop"].includes(id) ? "anthropic"
       : ["codex", "grok"].includes(id) ? "responses" : "openai";
-    const allowed = id === "gemini" ? ["gemini"]
-      : ["claude", "claude-desktop"].includes(id) ? ["anthropic"]
-      : ["codex", "grok"].includes(id) ? ["responses"]
-      : ["zed", "workbuddy", "hermes"].includes(id) ? ["openai"]
-      : ["anthropic", "openai", "responses"];
+    const allowed = clientProtocols(id);
     setProtocol(current => platformSource || !allowed.includes(current) ? preferred : current);
   };
   useEffect(() => {
@@ -506,6 +524,12 @@ export default function DesktopApp() {
     setResult(null);
   }
   const selectedModelSettings = activeKey ? {} : localModels.find(item => item.providerId === providerId && item.id === model) || {};
+  const configurationProtocols = activeKey ? clientProtocols(clientId) : (selectedModelSettings.protocols || []).filter(item => clientProtocols(clientId).includes(item));
+  const configurationProtocolKey = configurationProtocols.join(',');
+  useEffect(() => {
+    if (modal?.type !== 'configure' || activeKey) return;
+    setProtocol(current => configurationProtocols.includes(current) ? current : configurationProtocols[0] || '');
+  }, [modal?.type, activeKey, providerId, model, clientId, configurationProtocolKey]);
   const modelSettings = { contextWindow: selectedModelSettings.contextWindow || "", maxTokens: selectedModelSettings.maxTokens || "", supportsImages: selectedModelSettings.supportsImages ?? "", supportsTools: selectedModelSettings.supportsTools ?? "", supportsReasoning: selectedModelSettings.supportsReasoning ?? "", ...modelOverrides };
   const input = () => ({ ...(activeKey ? { keyId: activeKey } : { providerId }), client: clientId, model, protocol, modelSettings, ...(clientId === "deepseek-harness" ? { dshProfile } : {}) });
   const refreshHistory = async () => {
@@ -799,9 +823,11 @@ export default function DesktopApp() {
                           </strong>
                         </div>
                         <div className="agent-tile-footer">
-                          {c.installed && <button className="text-button agent-launch-button" aria-label={'运行 ' + c.name} title={c.bundle || ['claude-desktop', 'deepseek-harness-desktop', 'vscode', 'zed', 'zcode', 'workbuddy'].includes(c.id) ? '打开或切换到 ' + c.name : '在系统终端启动 ' + c.name} disabled={!!busy || installing} onClick={() => run('launch-' + c.id, async () => { const result = await invoke('launchAgent', c.id); notify(result.message); })}>
-                            {busy === 'launch-' + c.id ? <LoaderCircle size={12} className="spin" /> : <Play size={12} />}运行
-                          </button>}
+                          {c.installed && <AgentLaunchButton client={c} disabled={!!busy || installing} busy={busy === 'launch-' + c.id} onLaunch={target => run('launch-' + c.id, async () => {
+                            const result = await invoke('launchAgent', target ? { client: c.id, target } : c.id);
+                            if (!result.choices) notify(result.message);
+                            return result;
+                          })} />}
                           <AgentCardMenu client={c} disabled={!!busy || installing} onInspect={() => { setError(''); setModal({ type: 'config-files', client: c }); }} onUninstall={() => openUninstall(c)} />
                           <button
                             className="text-button agent-config-button"
@@ -880,12 +906,12 @@ export default function DesktopApp() {
               {wallet && <section className="key-wallet-summary" aria-label="账户可用预算">
                 <div className="key-wallet-heading">
                   <span>账户可用总预算</span>
-                  <strong>{wallet.unlimited ? "不限额" : wallet.available != null ? `${org === 'personal' ? '¥' : ''}${Number(wallet.available).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}${org === 'personal' ? '' : ' 积分'}` : "未返回"}</strong>
+                  <strong>{wallet.unlimited ? "不限额" : wallet.available != null ? `${org === 'personal' ? '¥' : ''}${Number(wallet.available).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}` : "未返回"}</strong>
                 </div>
                 <div className="key-wallet-meta">
-                  <span>{wallet.unlimited ? "当前账户不设预算上限" : `预算上限 ${wallet.limit != null ? `${org === 'personal' ? '¥' : ''}${Number(wallet.limit).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}${org === 'personal' ? '' : ' 积分'}` : "未返回"}`}</span>
-                  <span>已用 {wallet.used != null ? `${org === 'personal' ? '¥' : ''}${Number(wallet.used).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}${org === 'personal' ? '' : ' 积分'}` : "未返回"}</span>
-                  {wallet.organizationBalance != null && <span>账户余额 {org === 'personal' ? '¥' : ''}{Number(wallet.organizationBalance).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}{org === 'personal' ? '' : ' 积分'}</span>}
+                  <span>{wallet.unlimited ? "当前账户不设预算上限" : `预算上限 ${wallet.limit != null ? `${org === 'personal' ? '¥' : ''}${Number(wallet.limit).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}` : "未返回"}`}</span>
+                  <span>已用 {wallet.used != null ? `${org === 'personal' ? '¥' : ''}${Number(wallet.used).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}` : "未返回"}</span>
+                  {wallet.organizationBalance != null && <span>账户余额 {org === 'personal' ? '¥' : ''}{Number(wallet.organizationBalance).toLocaleString("zh-CN", { maximumFractionDigits: 4 })}</span>}
                 </div>
                 {wallet.percent != null && <progress aria-label="账户预算使用比例" max="100" value={wallet.percent} />}
               </section>}
@@ -957,8 +983,8 @@ export default function DesktopApp() {
                           </td>
                           <td><div className="key-statuses">{(k.statuses || [{ label: '状态未知', tone: 'muted' }]).map(s => <span key={s.label} className={'key-state ' + s.tone}>{s.label}</span>)}</div></td>
                           <td><div className="key-budget">
-                            <strong>{k.budget?.unlimited ? '不限额' : k.budget?.limit != null ? `${org === 'personal' ? '¥' : ''}${Number(k.budget.limit).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}${org === 'personal' ? '' : ' 积分'}${k.budget.period ? ' / ' + k.budget.period : ''}` : '预算未返回'}</strong>
-                            <small>已用 {k.budget?.used != null ? `${org === 'personal' ? '¥' : ''}${Number(k.budget.used).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}${org === 'personal' ? '' : ' 积分'}` : '未返回'}{k.budget?.remaining != null ? ` · 剩余 ${org === 'personal' ? '¥' : ''}${Number(k.budget.remaining).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}${org === 'personal' ? '' : ' 积分'}` : ''}</small>
+                            <strong>{k.budget?.unlimited ? '不限额' : k.budget?.limit != null ? `${org === 'personal' ? '¥' : ''}${Number(k.budget.limit).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}${k.budget.period ? ' / ' + k.budget.period : ''}` : '预算未返回'}</strong>
+                            <small>已用 {k.budget?.used != null ? `${org === 'personal' ? '¥' : ''}${Number(k.budget.used).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}` : '未返回'}{k.budget?.remaining != null ? ` · 剩余 ${org === 'personal' ? '¥' : ''}${Number(k.budget.remaining).toLocaleString('zh-CN', { maximumFractionDigits: 4 })}` : ''}</small>
                             {k.budget?.percent != null && <progress aria-label={k.name + '预算使用比例'} max="100" value={k.budget.percent} />}
                           </div></td>
                           <td><time>{k.expiresAt === 'permanent' ? '永久有效' : k.expiresAt ? time(k.expiresAt) : '未返回'}</time></td>
@@ -1006,32 +1032,26 @@ export default function DesktopApp() {
           )}
           {page === "providers" && (
             <>
-              <div className="section-toolbar"><span className="table-count">模型服务商 <span>{localProviders.length}</span></span><button className="button" disabled={!!busy} onClick={() => run("refresh-local", refreshLocal)}><RefreshCw size={15} className={busy === "refresh-local" ? "spin" : ""} />刷新</button></div>
-              <section className="provider-editor">
-                <div className="provider-editor-heading"><div><span className="eyebrow">BYOK</span><h3>{editingProvider ? "编辑模型服务商" : "添加模型服务商"}</h3><p>保存后可从服务商接口同步模型，也可以手动添加模型 ID。</p></div><ShieldCheck size={22} /></div>
-                <div className="provider-fields">
-                  <label><span>模型服务商名称</span><input placeholder="例如 OpenAI、硅基流动" value={providerDraft.name} onChange={e => setProviderDraft(v => ({ ...v, name: e.target.value }))} /></label>
-                  <label className="provider-url-field"><span>接口地址</span><input placeholder="https://api.openai.com" value={providerDraft.baseURL} onChange={e => setProviderDraft(v => ({ ...v, baseURL: e.target.value }))} /></label>
-                  <label><span>接口协议</span><select value={providerDraft.protocol} onChange={e => setProviderDraft(v => ({ ...v, protocol: e.target.value }))}><option value="openai">OpenAI Chat Completions</option><option value="responses">OpenAI Responses</option><option value="anthropic">Anthropic Messages</option><option value="gemini">Google Gemini 原生协议</option></select></label>
-                  <label><span>API Key</span><input type="password" placeholder={editingProvider ? "留空保留原密钥" : "仅加密保存"} value={providerDraft.apiKey} onChange={e => setProviderDraft(v => ({ ...v, apiKey: e.target.value }))} /></label>
-                  <label><span>备注 <em>可选</em></span><input placeholder="例如 工作账号、备用线路" maxLength={1000} value={providerDraft.notes} onChange={e => setProviderDraft(v => ({ ...v, notes: e.target.value }))} /></label>
-                  <label><span>官网链接 <em>可选</em></span><input type="url" placeholder="https://example.com" maxLength={2048} value={providerDraft.website} onChange={e => setProviderDraft(v => ({ ...v, website: e.target.value }))} /></label>
-                  <button className="button primary provider-save" disabled={!!busy} onClick={() => run("create-provider", async () => { await invoke(editingProvider ? "updateLocalProvider" : "createLocalProvider", { ...providerDraft, ...(editingProvider ? { id: editingProvider } : {}) }); setEditingProvider(""); setProviderDraft(emptyProvider()); await refreshLocal(); notify("模型服务商已保存"); })}><Zap size={14} />保存模型服务商</button>{editingProvider && <button className="button" onClick={() => { setEditingProvider(""); setProviderDraft(emptyProvider()); }}>取消编辑</button>}
-                </div>
-              </section>
+              <div className="section-toolbar"><span className="table-count">模型服务商 <span>{localProviders.length}</span></span><div className="provider-toolbar-actions"><button className="button" disabled={!!busy} onClick={() => run("refresh-local", refreshLocal)}><RefreshCw size={15} className={busy === "refresh-local" ? "spin" : ""} />刷新</button><button className="button primary" disabled={!!busy} onClick={() => { setError(''); setModal({ type: 'provider-editor' }); }}><Plus size={15} />添加服务商</button></div></div>
               {editingModel && <section className="model-settings-editor">
                 <div className="provider-model-heading"><div><strong>编辑模型资料</strong><small>请求 ID：{editingModel.id}</small></div><button className="icon-button" aria-label="取消编辑模型" onClick={() => setEditingModel(null)}><X size={16} /></button></div>
                 <label className="model-name-field">模型显示名称<input aria-label="模型显示名称" maxLength={120} value={editingModel.name} onChange={e => setEditingModel(v => ({ ...v, name: e.target.value }))} /></label>
+                <ProtocolChoices label="模型支持的协议" value={editingModel.protocols} options={localProviders.find(item => item.id === editingModel.providerId)?.protocols} onChange={protocols => setEditingModel(current => ({ ...current, protocols }))} />
                 <ModelSettingsFields value={editingModel} onChange={setEditingModel} />
                 <p className="settings-help">按模型的实际规格填写。保存为共用资料，各应用仅写入已支持的参数；留空沿用适配器默认值或现有配置。</p>
-                <button className="button primary" disabled={!!busy} onClick={() => run("edit-model", async () => { await invoke("updateLocalModel", editingModel); setEditingModel(null); await refreshLocal(); notify("模型资料已保存"); })}>保存模型参数</button>
+                <button className="button primary" disabled={!!busy || !editingModel.protocols.length} onClick={() => run("edit-model", async () => { await invoke("updateLocalModel", editingModel); setEditingModel(null); await refreshLocal(); notify("模型资料已保存"); })}>保存模型参数</button>
               </section>}
               <div className="provider-list">
                 {localProviders.map(provider => { const collapsed = collapsedProviders[provider.id]; return <section className={"provider-row" + (collapsed ? " is-collapsed" : "")} key={provider.id}>
-                  <div className="provider-summary"><div className="provider-avatar"><Server size={18} /></div><div><strong>{provider.name}</strong><small>{provider.protocol} · {provider.baseURL}</small>{provider.notes && <p className="provider-notes">{provider.notes}</p>}{provider.website && <button className="text-button provider-website" title={provider.website} onClick={() => run("provider-website", () => invoke("openLocalProviderWebsite", { id: provider.id }))}>官网 <ExternalLink size={11} /></button>}</div><div className="provider-actions"><button className="icon-button provider-toggle" title={collapsed ? "展开模型服务商" : "收起模型服务商"} aria-label={collapsed ? "展开模型服务商" : "收起模型服务商"} onClick={() => setCollapsedProviders(value => ({ ...value, [provider.id]: !value[provider.id] }))}><ChevronDown size={17} /></button><button className="button" disabled={!!busy} onClick={() => { setError(''); setModal({ type: 'import-models', provider }); }}><RefreshCw size={14} />一键拉取模型</button><button className="text-button" onClick={() => openConfig(null, null, provider)}>一键配置</button><button className="text-button" disabled={!!busy} onClick={() => { setEditingProvider(provider.id); setProviderDraft({ name: provider.name, baseURL: provider.baseURL, protocol: provider.protocol, apiKey: "", notes: provider.notes || "", website: provider.website || "" }); }}>编辑</button><button className="icon-button" disabled={!!busy} title="删除模型服务商" onClick={() => run("delete-provider", async () => { await invoke("deleteLocalProvider", { id: provider.id }); if (editingModel?.providerId === provider.id) setEditingModel(null); if (editingProvider === provider.id) { setEditingProvider(""); setProviderDraft(emptyProvider()); } await refreshLocal(); })}><Trash2 size={15} /></button></div></div>
-                  {!collapsed && <div className="provider-model-section"><div className="provider-model-heading"><div><strong>模型</strong><small>{provider.models.length ? `${provider.models.filter(item => item.enabled).length} / ${provider.models.length} 个已启用` : "还没有模型"}</small></div><span>支持选择导入或手动录入</span></div><div className="provider-models">{provider.models.length ? provider.models.map(item => <span className={item.isDefault ? "pill success" : "pill"} key={item.id}>{item.name}{(item.contextWindow || item.maxTokens) && <small className="model-limits" title={`上下文 ${item.contextWindow || "默认"} / 输出 ${item.maxTokens || "默认"}`}>{item.contextWindow ? `${Number(item.contextWindow).toLocaleString()} 上下文` : `${Number(item.maxTokens).toLocaleString()} 输出`}</small>}{!item.enabled ? " · 已停用" : item.isDefault ? " · 默认" : ""}<button className="text-button" disabled={!!busy} title={item.enabled ? "停用模型" : "启用模型"} onClick={() => run("toggle-model", async () => { await invoke("updateLocalModel", { providerId: provider.id, id: item.id, enabled: !item.enabled }); await refreshLocal(); })}>{item.enabled ? "停用" : "启用"}</button>{item.enabled && !item.isDefault && <button className="text-button" disabled={!!busy} title="设为默认模型" onClick={() => run("default-model", async () => { await invoke("setDefaultLocalModel", { providerId: provider.id, modelId: item.id }); await refreshLocal(); })}>默认</button>}<button className="icon-button" title="编辑模型资料" onClick={() => setEditingModel({ providerId: provider.id, id: item.id, name: item.name, contextWindow: item.contextWindow || "", maxTokens: item.maxTokens || "", supportsImages: item.supportsImages ?? "", supportsTools: item.supportsTools ?? "", supportsReasoning: item.supportsReasoning ?? "" })}><Pencil size={11} /></button><button className="icon-button" title="删除模型" onClick={() => run("delete-model", async () => { await invoke("deleteLocalModel", { providerId: provider.id, id: item.id }); await refreshLocal(); })}><X size={12} /></button></span>) : <span className="inline-empty">暂无模型，请手动添加或点击一键拉取</span>}</div><div className="provider-model-add"><label><span>模型 ID</span><input placeholder="例如 gpt-4o、deepseek-chat" value={providerId === provider.id ? modelDraft.id : ""} onChange={e => { setProviderId(provider.id); setModelDraft(v => ({ ...(providerId === provider.id ? v : emptyModel()), id: e.target.value })); }} /></label><label><span>显示名称 <em>可选</em></span><input placeholder="默认使用模型 ID" value={providerId === provider.id ? modelDraft.name : ""} onChange={e => { setProviderId(provider.id); setModelDraft(v => ({ ...(providerId === provider.id ? v : emptyModel()), name: e.target.value })); }} /></label><button className="button" disabled={!!busy || providerId !== provider.id || !modelDraft.id.trim()} onClick={() => run("create-model", async () => { await invoke("createLocalModel", { ...modelDraft, providerId: provider.id, id: modelDraft.id.trim() }); setModelDraft(emptyModel()); await refreshLocal(); })}><Pencil size={14} />手动添加模型</button></div><details className="model-advanced"><summary>模型规格 <span>可选</span></summary><ModelSettingsFields value={providerId === provider.id ? modelDraft : emptyModel()} onChange={updater => { setProviderId(provider.id); setModelDraft(current => typeof updater === "function" ? updater(providerId === provider.id ? current : emptyModel()) : updater); }} /><p className="settings-help">模型规格用于所有应用的一键配置；请填写服务商公布的实际限制。</p></details></div>}
+                  <div className="provider-summary"><div className="provider-avatar"><Server size={18} /></div><div className="provider-identity"><div className="provider-title"><strong title={provider.name}>{provider.name}</strong><button className="icon-button provider-toggle" title={collapsed ? "展开模型服务商" : "收起模型服务商"} aria-expanded={!collapsed} aria-label={collapsed ? "展开模型服务商" : "收起模型服务商"} onClick={() => setCollapsedProviders(value => ({ ...value, [provider.id]: !value[provider.id] }))}><ChevronDown size={17} /></button></div><div className="provider-meta"><span className="provider-protocol" title={(provider.protocols || [provider.protocol]).join(" · ")}>{(provider.protocols || [provider.protocol]).join(" · ")}</span><span className="provider-endpoint" title={provider.baseURL}>{provider.baseURL}</span></div>{provider.notes && <p className="provider-notes">{provider.notes}</p>}{provider.website && <button className="text-button provider-website" title={provider.website} onClick={() => run("provider-website", () => invoke("openLocalProviderWebsite", { id: provider.id }))}>官网 <ExternalLink size={11} /></button>}</div><div className="provider-actions"><button className="button" disabled={!!busy} onClick={() => { setError(''); setModal({ type: 'import-models', provider }); }}><RefreshCw size={14} />一键拉取模型</button><button className="button" onClick={() => openConfig(null, null, provider)}>一键配置</button><button className="button" disabled={!!busy} onClick={() => { setError(''); setModal({ type: 'provider-editor', provider }); }}>编辑</button><button className="button provider-delete" disabled={!!busy} aria-label="删除模型服务商" title="删除模型服务商" onClick={() => run("delete-provider", async () => { await invoke("deleteLocalProvider", { id: provider.id }); if (editingModel?.providerId === provider.id) setEditingModel(null); await refreshLocal(); })}><Trash2 size={15} /></button></div></div>
+                  {!collapsed && <div className="provider-model-section"><div className="provider-model-heading"><div><strong>模型</strong><small>{provider.models.length ? `${provider.models.filter(item => item.enabled).length} / ${provider.models.length} 个已启用` : "还没有模型"}</small></div><span>支持选择导入或手动录入</span></div><ProviderModelList provider={provider} busy={!!busy}
+                    onToggle={item => run("toggle-model", async () => { await invoke("updateLocalModel", { providerId: provider.id, id: item.id, enabled: !item.enabled }); await refreshLocal(); })}
+                    onSetDefault={item => run("default-model", async () => { await invoke("setDefaultLocalModel", { providerId: provider.id, modelId: item.id }); await refreshLocal(); })}
+                    onEdit={item => setEditingModel({ providerId: provider.id, id: item.id, name: item.name, protocols: item.protocols || [provider.protocol], contextWindow: item.contextWindow || "", maxTokens: item.maxTokens || "", supportsImages: item.supportsImages ?? "", supportsTools: item.supportsTools ?? "", supportsReasoning: item.supportsReasoning ?? "" })}
+                    onDelete={item => run("delete-model", async () => { await invoke("deleteLocalModel", { providerId: provider.id, id: item.id }); await refreshLocal(); })}
+                  /><div className="provider-model-add"><label><span>模型 ID</span><input placeholder="例如 gpt-4o、deepseek-chat" value={providerId === provider.id ? modelDraft.id : ""} onChange={e => { setProviderId(provider.id); setModelDraft(v => ({ ...(providerId === provider.id ? v : emptyModel()), id: e.target.value })); }} /></label><label><span>显示名称 <em>可选</em></span><input placeholder="默认使用模型 ID" value={providerId === provider.id ? modelDraft.name : ""} onChange={e => { setProviderId(provider.id); setModelDraft(v => ({ ...(providerId === provider.id ? v : emptyModel()), name: e.target.value })); }} /></label><button className="button" disabled={!!busy || providerId !== provider.id || !modelDraft.id.trim() || modelDraft.protocols?.length === 0} onClick={() => run("create-model", async () => { await invoke("createLocalModel", { ...modelDraft, providerId: provider.id, id: modelDraft.id.trim() }); setModelDraft(emptyModel()); await refreshLocal(); })}><Pencil size={14} />手动添加模型</button></div><details className="model-advanced"><summary>模型规格 <span>可选</span></summary><ProtocolChoices label="模型支持的协议" value={providerId === provider.id ? modelDraft.protocols || [provider.protocol] : [provider.protocol]} options={provider.protocols} onChange={protocols => { setProviderId(provider.id); setModelDraft(current => ({ ...(providerId === provider.id ? current : emptyModel()), protocols })); }} /><ModelSettingsFields value={providerId === provider.id ? modelDraft : emptyModel()} onChange={updater => { setProviderId(provider.id); setModelDraft(current => typeof updater === "function" ? updater(providerId === provider.id ? current : emptyModel()) : updater); }} /><p className="settings-help">模型规格用于所有应用的一键配置；请填写服务商公布的实际限制。</p></details></div>}
                 </section>; })}
-                {!localProviders.length && <div className="empty"><Server size={28} /><h3>还没有模型服务商</h3><p>添加模型服务商后即可使用 BYOK，不需要登录 OneLinkAI。</p></div>}
+                {!localProviders.length && <div className="empty"><Server size={28} /><h3>还没有模型服务商</h3><p>添加自己的 API 地址和密钥，即可管理模型并配置到客户端。</p><button className="button primary" onClick={() => { setError(''); setModal({ type: 'provider-editor' }); }}><Plus size={15} />添加第一个服务商</button></div>}
               </div>
             </>
           )}
@@ -1114,27 +1134,12 @@ export default function DesktopApp() {
             <>
               <div className="section-toolbar">
                 <form className="request-filters" onSubmit={e => { e.preventDefault(); setRequestPage(1); setRequestFilters({ ...requestDraft }); }}>
-                  <select
-                    aria-label="筛选请求密钥"
-                    value={requestKey}
-                    onChange={(e) => { setRequestPage(1); setRequestKey(e.target.value); }}
-                  >
-                    <option value="">全部 API Keys</option>
-                    {keys.map((k) => (
-                      <option key={k.id} value={k.id}>
-                        {k.name} · {keyTypeLabel(k)}
-                      </option>
-                    ))}
-                  </select>
-                  {requestOptions.users?.length > 0 && <select aria-label="筛选请求用户" value={requestDraft.userId} onChange={e => setRequestDraft(value => ({ ...value, userId: e.target.value }))}><option value="">全部用户</option>{requestOptions.users.map(user => <option key={user.value} value={user.value}>{user.label}</option>)}</select>}
+                  <SearchFilter label="全部 API Keys" value={requestKey} options={keys.map(k => ({ value: k.id, label: `${k.name} · ${keyTypeLabel(k)}` }))} onChange={value => { setRequestPage(1); setRequestKey(value); }} />
+                  {requestOptions.users?.length > 0 && <SearchFilter label="全部用户" value={requestDraft.userId} options={requestOptions.users} onChange={userId => setRequestDraft(value => ({ ...value, userId }))} />}
                   {[["modelId", "全部模型", requestOptions.models], ["supplierId", "全部模型服务商", requestOptions.suppliers], ["modelTypes", "全部模型类型", requestOptions.types]].map(([field, label, options]) => (
-                    <select key={field} aria-label={label} value={requestDraft[field]} onChange={e => setRequestDraft(value => ({ ...value, [field]: e.target.value }))}>
-                      <option value="">{label}</option>
-                      {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
+                    <SearchFilter key={field} label={label} value={requestDraft[field]} options={options} onChange={selected => setRequestDraft(value => ({ ...value, [field]: selected }))} />
                   ))}
-                  <label className="request-date">开始时间<input type="datetime-local" aria-label="开始时间" value={requestDraft.startTime.replace(' ', 'T').slice(0, 16)} onChange={e => setRequestDraft(value => ({ ...value, startTime: e.target.value ? e.target.value.replace('T', ' ') + ':00' : '' }))} /></label>
-                  <label className="request-date">结束时间<input type="datetime-local" aria-label="结束时间" value={requestDraft.endTime.replace(' ', 'T').slice(0, 16)} onChange={e => setRequestDraft(value => ({ ...value, endTime: e.target.value ? e.target.value.replace('T', ' ') + ':59' : '' }))} /></label>
+                  <RequestDateRange startTime={requestDraft.startTime} endTime={requestDraft.endTime} onChange={(startTime, endTime) => setRequestDraft(value => ({ ...value, startTime, endTime }))} />
                   <button className="button" type="submit" disabled={requestLoading}><Filter size={14} />筛选</button>
                   <button className="icon-button" type="button" title="重置筛选" aria-label="重置筛选" onClick={() => { setRequestKey(''); setRequestPage(1); setRequestDraft(emptyRequestFilters()); setRequestFilters(emptyRequestFilters()); }}><RotateCcw size={15} /></button>
                 </form>
@@ -1245,12 +1250,12 @@ export default function DesktopApp() {
               "modal " +
               (modal.type === "configure"
                 ? "config-modal configure-workflow"
-                : modal.type === 'import-models' ? 'model-import-modal' : modal.type === 'config-files' ? 'config-reader-modal' : "")
+                : modal.type === 'provider-editor' ? 'provider-editor-modal' : modal.type === 'import-models' ? 'model-import-modal' : modal.type === 'config-files' ? 'config-reader-modal' : "")
             }
             role="dialog"
             aria-modal="true"
             aria-label={
-              modal.type === "configure" ? "配置客户端" : modal.type === "config-files" ? "本机配置文件" : "确认操作"
+              modal.type === "provider-editor" ? (modal.provider ? "编辑服务商" : "添加服务商") : modal.type === "configure" ? "配置客户端" : modal.type === "config-files" ? "本机配置文件" : "确认操作"
             }
           >
             <button
@@ -1266,6 +1271,7 @@ export default function DesktopApp() {
                 {error}
               </div>
             )}
+            {modal.type === 'provider-editor' && <ProviderEditorDialog key={modal.provider?.id || 'new'} provider={modal.provider} busy={!!busy} onClose={close} onSave={draft => run('save-provider', async () => { await invoke(modal.provider ? 'updateLocalProvider' : 'createLocalProvider', { ...draft, ...(modal.provider ? { id: modal.provider.id } : {}) }); await refreshLocal(); close(); notify('模型服务商已保存'); })} />}
             {modal.type === 'import-models' && <ModelImportDialog provider={modal.provider} onClose={close} onConfirm={selection => run('select-models', async () => { await invoke('selectLocalModels', { providerId: modal.provider.id, models: selection }); await refreshLocal(); close(); notify('模型选择已更新'); })} busy={!!busy} />}
             {modal.type === 'config-files' && <ClientConfigViewer client={modal.client} />}
             {modal.type === 'manual-update' && <>
@@ -1302,7 +1308,7 @@ export default function DesktopApp() {
                   {uninstallPlan.supported && <button className="button primary" disabled={!!busy} onClick={() => run('uninstall', async () => {
                     const result = await invoke('uninstall', { client: modal.client.id, target: uninstallPlan.target });
                     await scan(); close(); notify(result.message);
-                  })}>{busy === 'uninstall' ? <LoaderCircle size={14} className="spin" /> : <Trash2 size={14} />}{busy === 'uninstall' ? '正在卸载…' : '确认卸载'}</button>}
+                  })}>{busy === 'uninstall' ? <LoaderCircle size={14} className="spin" /> : <Trash2 size={14} />}{busy === 'uninstall' ? '正在处理…' : uninstallPlan.kind === 'system-settings' ? '打开系统卸载' : '确认卸载'}</button>}
                 </div>
               </>}
             </>}
@@ -1320,7 +1326,7 @@ export default function DesktopApp() {
                         <div className="notice">{installPlan.notice}</div>
                       </>
                     ) : <div className="notice warning">{installPlan.reason}</div>}
-                    {installation && (
+                    {installation?.client === modal.client.id && (
                       <div className="install-progress" role="status">
                         <strong>{installation.running ? (modal.update ? '升级中…' : "安装中…") : installation.phase === "complete" ? (modal.update ? '升级完成并已校验' : "已安装并检测到客户端") : (modal.update ? '升级未完成' : "安装未完成")}</strong>
                         {installation.routes && Object.entries(installation.routes).map(([kind, routes]) => routes?.length ? (
@@ -1331,11 +1337,12 @@ export default function DesktopApp() {
                         ) : null)}
                         <pre>{installation.logs.join("\n")}</pre>
                         {installation.error && <p className="error-message">{installation.error}</p>}
+                        {installation.error?.includes('Git for Windows') && <a className="button" href="https://git-scm.com/downloads/win" target="_blank" rel="noreferrer">下载 Git for Windows<ExternalLink size={14} /></a>}
                       </div>
                     )}
                     <div className="modal-footer">
                       <span>{installation?.running ? "请保持应用运行" : "用户目录安装"}</span>
-                      {installation?.phase === "complete" ? (
+                      {installation?.client === modal.client.id && installation?.phase === "complete" ? (
                         <button className="button primary" onClick={() => openConfig(keys[0], modal.client)}>配置客户端<ArrowRight size={14} /></button>
                       ) : installPlan.supported ? (
                         <button className="button primary" disabled={!!busy || installation?.running} onClick={() => run("install", async () => setInstallation(await invoke(modal.update ? 'upgradeAgent' : "install", modal.client.id)))}>
@@ -1392,15 +1399,14 @@ export default function DesktopApp() {
             {modal.type === "configure" && (
               <>
                 <h2>
-                  {result ? "配置成功" : "配置客户端"}
+                  {result ? (result.requiresManualCredential ? "还需填写密钥" : "配置成功") : "配置客户端"}
                 </h2>
-                {key && <p className="modal-description">{key.name} <span className="key-inline">{key.masked}</span></p>}
                 {result ? (
                   <>
                     <span className="success-symbol">
                       <Check size={28} />
                     </span>
-                    <h2 className="success-title">{["vscode", "zed"].includes(clientId) ? "模型定义已写入，待在客户端填写密钥" : "配置文件已写入并回读校验"}</h2>
+                    <h2 className="success-title">{result.requiresManualCredential ? "模型定义已写入，待在客户端填写密钥" : clientId === "zed" ? "模型与 API Key 已写入并校验" : "配置文件已写入并回读校验"}</h2>
                     <div className="notice">{result.notice}</div>
                     <p>{tested ? "模型接口测试通过；请在客户端新会话中确认加载" : "尚未验证客户端加载与模型请求"}</p>
                     <div className="modal-footer">
@@ -1471,6 +1477,7 @@ export default function DesktopApp() {
                     </div>
                     <div className="config-workspace-grid">
                     <fieldset className="config-controls" disabled={!!busy}>
+                    <div className="config-model-layout">
                     {!installed.length && (
                       <div className="notice">
                         未发现已安装的客户端
@@ -1479,29 +1486,16 @@ export default function DesktopApp() {
                         </button>
                       </div>
                     )}
-                    <div className="model-label">
-                      <label className="field-label">选择模型</label>
-                      <button
-                        className="text-button"
-                        disabled={modelsLoading}
-                        onClick={() => loadModels(activeKey)}
-                      >
-                        <RefreshCw
-                          size={12}
-                          className={modelsLoading ? "spin" : ""}
-                        />
-                        刷新模型
-                      </button>
-                    </div>
                     <label className="search model-search">
                       <Search size={14} />
                       <input
                         aria-label="搜索模型"
-                        placeholder="搜索可用模型…"
+                        placeholder="搜索全部模型 ID（含隐藏模型）…"
                         value={modelQuery}
                         onChange={(e) => setModelQuery(e.target.value)}
                       />
-                      <span>{models.length}</span>
+                      <span>{searchQuery ? filteredModels.length : models.filter(item => item.showInSquare !== false).length}</span>
+                      <button type="button" className="icon-button model-refresh" aria-label="刷新模型" title="刷新模型" disabled={modelsLoading} onClick={() => loadModels(activeKey)}><RefreshCw size={14} className={modelsLoading ? "spin" : ""} /></button>
                     </label>
                     {!modelsLoading && !modelError && models.length > 0 && (
                       <div className="model-category-tabs" role="tablist" aria-label="模型分类">
@@ -1517,7 +1511,7 @@ export default function DesktopApp() {
                           <LoaderCircle size={19} className="spin" />
                           正在拉取模型
                         </div>
-                      ) : modelError ? (
+                      ) : modelError && !filteredModels.length && !currentSearch?.loading ? (
                         <div
                           className="model-loading error-message"
                           role="alert"
@@ -1531,6 +1525,8 @@ export default function DesktopApp() {
                             <RefreshCw size={12} />
                           </button>
                         </div>
+                      ) : !filteredModels.length ? (
+                        <div className="model-picker-empty" role="status">{currentSearch?.loading ? '正在搜索全部模型 ID…' : searchQuery ? '没有匹配的模型 ID' : models.length ? '该分类下没有匹配的模型' : '暂无可用模型，请刷新模型或切换配置来源'}</div>
                       ) : (
                         filteredModels
                           .map((m) => (
@@ -1538,6 +1534,7 @@ export default function DesktopApp() {
                               key={m.id}
                               className={model === m.id ? "picked" : ""}
                               onClick={() => {
+                                if (!models.some(item => item.id === m.id)) setModels(current => [...current, { ...m, showInSquare: false }]);
                                 setModel(m.id);
                                 setTested(false);
                               }}
@@ -1560,9 +1557,8 @@ export default function DesktopApp() {
                           ))
                       )}
                     </div>
-                    {!modelsLoading && !modelError && preferredModel.current && models.length > 0 && !models.some(item => item.id === preferredModel.current) && <small className="settings-help">当前模型 {preferredModel.current} 不在此来源的可用列表中，请选择可用模型。</small>}
-                    {!modelsLoading && !modelError && models.length > 0 && !filteredModels.length && <div className="inline-empty">该分类下没有匹配的模型</div>}
-                    {clientId === "deepseek-harness" && <label>CLI Profile<input aria-label="DSH CLI Profile" value={dshProfile} placeholder="web" onChange={e => setDshProfile(e.target.value)} /><small>WebUI 使用 web；自定义 profile 请填写启动时的名称。使用 dsh --profile {dshProfile || "web"} 启动。</small></label>}
+                    {currentSearch?.loading && filteredModels.length > 0 && <div className="settings-help" role="status">正在搜索全部模型 ID…</div>}
+                    {currentSearch?.error && <div className="notice warning" role="alert">模型搜索失败：{currentSearch.error}</div>}
                     {clientId === "deepseek-harness-desktop" && <div className="notice">配置目标：桌面版 desktop profile。配置后完全退出并重启 DeepSeek Harness Desktop。</div>}
                     <div className="protocol-row">
                       <label htmlFor="protocol">接口协议</label>
@@ -1574,51 +1570,28 @@ export default function DesktopApp() {
                           setTested(false);
                         }}
                       >
-                        <option
-                          value="anthropic"
-                          disabled={[
-                            "codex",
-                            "grok",
-                            "gemini",
-                            "zed",
-                            "workbuddy",
-                            "hermes",
-                          ].includes(clientId)}
-                        >
-                          Anthropic Messages
-                        </option>
-                        <option
-                          value="openai"
-                          disabled={["claude", "claude-desktop", "codex", "grok", "gemini"].includes(clientId)}
-                        >
-                          OpenAI Chat Completions
-                        </option>
-                        <option
-                          value="responses"
-                          disabled={[
-                            "claude",
-                            "claude-desktop",
-                            "gemini",
-                            "zed",
-                            "workbuddy",
-                            "hermes",
-                          ].includes(clientId)}
-                        >
-                          OpenAI Responses
-                        </option>
-                        <option value="gemini" disabled={clientId !== "gemini"}>Google Gemini 原生协议</option>
+                        {!configurationProtocols.length && <option value="">无兼容协议</option>}
+                        {protocolOptions.map(([id, name]) => <option key={id} value={id} disabled={!configurationProtocols.includes(id)}>{name}</option>)}
                       </select>
                     </div>
+                    {!activeKey && model && !configurationProtocols.length && <div className="notice" role="alert">此模型与当前应用没有共同支持的协议，请切换模型或应用，或编辑模型的协议设置。</div>}
                     {tested && (
                       <div className="notice">
                         <CheckCircle2 size={15} />
                         模型连接测试通过
                       </div>
                     )}
+                    </div>
                     </fieldset>
                     <aside className="config-details-column" ref={configDetailsRef} aria-label="高级设置与配置文件">
                     <fieldset className="config-advanced-controls" disabled={!!busy}>
                     <section className="model-advanced configuration-advanced">
+                      {clientId === "deepseek-harness" && <div className="model-settings-fields dsh-profile-settings">
+                        <label htmlFor="dsh-cli-profile"><span>配置档（Profile）<span className="config-help" tabIndex={0} aria-label="配置档说明">ⓘ<span role="tooltip">默认使用 web，仅在使用自定义配置档时修改。启动时自动携带 dsh --profile {dshProfile || 'web'}。</span></span></span>
+                          <input id="dsh-cli-profile" aria-label="DSH CLI Profile" value={dshProfile} placeholder="web" maxLength={64} onChange={e => setDshProfile(e.target.value)} />
+                        </label>
+                      </div>}
+
                       <div className="config-section-heading">模型参数 <span>{(clientCapabilities[clientId] || []).some(field => field !== "name") ? "按应用适配" : "当前应用暂无可写入的规格参数"}</span></div>
                       <ModelSettingsFields value={modelSettings} client={clientId} supported={clientCapabilities[clientId] || []} onChange={updater => { setModelOverrides(current => { const value = { ...modelSettings, ...current }; return typeof updater === "function" ? updater(value) : updater; }); setPlan(null); setTested(false); }} />
                       <p className="settings-help" title={clientSettingNotes[clientId]}>参数仅用于本次配置，留空沿用现有设置。<span className="config-help" tabIndex={0} aria-label={clientSettingNotes[clientId] || '灰色参数由客户端或服务端管理'}>ⓘ<span role="tooltip">{clientSettingNotes[clientId]} 长期规格可在模型服务商中编辑；灰色参数由客户端或服务端管理。</span></span></p>
@@ -1635,8 +1608,17 @@ export default function DesktopApp() {
                       <div className="config-pane-content" role="tabpanel" aria-label={configPane === 'local' ? '本机配置' : '写入预览'}>
                         {configPane === 'local' ? selected ? <ClientConfigViewer key={clientId} client={selected} embedded /> : <div className="config-pane-empty">选择应用后查看本机配置</div> : plan ? <>
                           <nav className="preview-file-tabs" aria-label="预览文件">{plan.files.map(file => <button key={file.path} className={(previewPath || plan.files[0]?.path) === file.path ? 'selected' : ''} title={file.path} onClick={() => setPreviewPath(file.path)}>{file.path.split(/[\\/]/).pop()}</button>)}</nav>
-                          <div className="config-file-meta"><code>{(plan.files.find(file => file.path === previewPath) || plan.files[0])?.path}</code><span>写入前预览 · 自动备份原文件</span></div>
-                          <ConfigCode className="preview-code" content={(plan.files.find(file => file.path === previewPath) || plan.files[0])?.content} path={(plan.files.find(file => file.path === previewPath) || plan.files[0])?.path} />
+                          {(() => {
+                            const file = plan.files.find(file => file.path === previewPath) || plan.files[0];
+                            const index = plan.files.indexOf(file);
+                            return <>
+                              <div className="preview-edit-toolbar"><button className="text-button" disabled={!file?.editable || !!busy} onClick={() => setEditingPreview(value => !value)}><Pencil size={13} />{editingPreview ? '查看高亮' : '编辑配置'}</button>
+                              {Object.hasOwn(previewEdits, index) && <button className="text-button" onClick={() => setPreviewEdits(current => { const next = { ...current }; delete next[index]; return next; })}>还原此文件</button>}
+                              <small>{file?.editable ? '密钥占位符请保持原位；编辑后会重新格式化' : '凭据文件不可编辑'}</small></div>
+                              {editingPreview && file?.editable ? <textarea className="preview-editor" aria-label="编辑配置预览" spellCheck={false} value={previewEdits[index] ?? file.editContent} onChange={event => { const content = event.target.value; setPreviewEdits(current => ({ ...current, [index]: content })); }} /> :
+                              <ConfigCode className="preview-code" content={previewEdits[index] ?? file?.content} path={file?.path} />}
+                            </>;
+                          })()}
                           <div className="notice config-preview-notice"><ShieldCheck size={14} />{plan.notice}{plan.credential && <p>{plan.credential}</p>}</div>
                         </> : <div className="config-pane-empty"><ShieldCheck size={28} /><strong>先预览，再确认写入</strong><p>选择模型、调整参数后，点击底部“预览配置”查看实际变更。</p></div>}
                       </div>
@@ -1648,7 +1630,7 @@ export default function DesktopApp() {
                       <button
                         className="text-button"
                         title="发送少量测试请求，会消耗 API 额度"
-                        disabled={!!busy || !model || !clientId}
+                        disabled={!!busy || !model || !configurationProtocols.includes(protocol) || !clientId}
                         onClick={() =>
                           run("test", async () => {
                             await invoke("test", input());
@@ -1666,11 +1648,12 @@ export default function DesktopApp() {
                       <button
                         className="button primary"
                         disabled={
-                          !!busy || modelsLoading || !model || !clientId
+                          !!busy || modelsLoading || !model || !configurationProtocols.includes(protocol) || !clientId
                         }
                         onClick={() =>
                           run("preview", async () => {
-                            setPlan(await invoke("preview", input())); setPreviewPath(''); setConfigPane('preview');
+                            const nextPlan = await invoke("preview", input());
+                            setPlan(nextPlan); setPreviewPath(nextPlan.files.find(file => file.editable)?.path || ''); setConfigPane('preview');
                           })
                         }
                       >
@@ -1681,7 +1664,7 @@ export default function DesktopApp() {
                         )}
                         {plan ? '重新预览' : '预览配置'}
                       </button>
-                      {plan && <button className="button primary" disabled={!!busy} onClick={() => run('apply', async () => { setResult(await invoke('apply', plan.token)); await refreshHistory(); })}>{busy === 'apply' ? <LoaderCircle size={15} className="spin" /> : <Zap size={15} />}确认写入</button>}
+                      {plan && <button className="button primary" disabled={!!busy} onClick={() => run('apply', async () => { setResult(await invoke('apply', { token: plan.token, edits: Object.entries(previewEdits).map(([index, content]) => ({ index: Number(index), content })) })); await refreshHistory(); })}>{busy === 'apply' ? <LoaderCircle size={15} className="spin" /> : <Zap size={15} />}确认写入</button>}
                     </div>
                   </>
                 )}

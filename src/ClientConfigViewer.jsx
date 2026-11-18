@@ -35,11 +35,10 @@ export default function ClientConfigViewer({ client, embedded = false }) {
     {loading && !snapshot ? <div className="model-loading"><LoaderCircle size={16} className="spin" />正在读取配置文件…</div> : snapshot && <>
       <div className="config-reader-layout" aria-busy={loading}>
         <div className="config-reader-filebar"><nav className="config-file-list" aria-label="配置文件列表">
-          {snapshot.files.map(item => <button key={item.path} className={selectedPath === item.path ? 'selected' : ''} aria-pressed={selectedPath === item.path} title={item.path} onClick={() => setSelectedPath(item.path)}><span>{item.label}</span><small>{statusLabels[item.status]}</small></button>)}
+          {snapshot.files.map(item => <button key={item.path} className={selectedPath === item.path ? 'selected' : ''} aria-pressed={selectedPath === item.path} title={[item.path, item.format?.toUpperCase() + ' · 已脱敏', item.modifiedAt && '修改时间：' + new Date(item.modifiedAt).toLocaleString('zh-CN')].filter(Boolean).join('\n')} onClick={() => setSelectedPath(item.path)}><span>{item.label}</span><small>{statusLabels[item.status]}</small></button>)}
         </nav><button className="text-button config-reload" title="重新读取本机文件" disabled={loading} onClick={() => setReload(value => value + 1)}><RefreshCw size={13} className={loading ? 'spin' : ''} />重新读取</button></div>
         <section className="config-file-body">
           {file && <>
-            <div className="config-file-meta" title={file.path + (file.modifiedAt ? '\n修改时间：' + new Date(file.modifiedAt).toLocaleString('zh-CN') : '')}><code>{file.path}</code><span>{file.format.toUpperCase()} · 已脱敏</span></div>
             {file.status === 'present' ? <>
               <div className="config-file-toolbar"><label><Search size={13} /><input aria-label="搜索当前配置文件" placeholder="查找参数或内容" value={query} onChange={event => setQuery(event.target.value)} /></label><button className="text-button" onClick={copyContent}><Copy size={13} />复制脱敏内容</button></div>
               {copyStatus && <span className="config-copy-status" role="status">{copyStatus}</span>}

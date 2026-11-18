@@ -65,6 +65,48 @@ function input(client, protocol = "openai") {
   };
 }
 
+test('Zed automatically writes, redacts and restores credentials with its settings', async t => {
+  const { service, secrets } = await fixture(t, true);
+  const url = 'https://api.example.com/v1';
+  secrets.set(url, 'old-private-key');
+  const plan = await service.preview(input('zed'));
+  assert.equal(plan.requiresManualCredential, false);
+  assert.equal(JSON.stringify(plan).includes('old-private-key'), false);
+  assert.equal(JSON.stringify(plan).includes(input('zed').apiKey), false);
+  assert.match(plan.credential, /macOS 钥匙串/);
+  const entry = await service.apply(plan.token);
+  assert.equal(entry.requiresManualCredential, false);
+  assert.equal(secrets.get(url), input('zed').apiKey);
+  assert.match(entry.notice, /API Key 已写入/);
+  await service.restore(entry.id);
+  assert.equal(secrets.get(url), 'old-private-key');
+});
+
+test('Zed model capabilities include every required settings field and repair an older configuration', async t => {
+  const { service } = await fixture(t, true);
+  const initial = await service.preview(input('zed'));
+  const file = initial.files.find(file => file.path.endsWith('settings.json'));
+  const settings = JSON.parse(file.content);
+  const capabilities = settings.language_models.openai_compatible.OneLinkAI.available_models[0].capabilities;
+  // Required booleans in Zed's OpenAiCompatibleModelCapabilities (settings_content).
+  for (const field of ['tools', 'images', 'parallel_tool_calls', 'prompt_cache_key'])
+    assert.equal(typeof capabilities[field], 'boolean', field);
+  assert.equal(capabilities.prompt_cache_key, false);
+  delete capabilities.prompt_cache_key;
+  settings.unrelated = { keep: true };
+  const original = '// existing user settings\n' + JSON.stringify(settings, null, 2) + '\n';
+  await fs.mkdir(path.dirname(file.path), { recursive: true });
+  await fs.writeFile(file.path, original);
+  const result = await service.apply((await service.preview(input('zed'))).token);
+  const repairedText = await fs.readFile(file.path, 'utf8');
+  const repaired = require('jsonc-parser').parse(repairedText);
+  assert.equal(repaired.language_models.openai_compatible.OneLinkAI.available_models[0].capabilities.prompt_cache_key, false);
+  assert.deepEqual(repaired.unrelated, { keep: true });
+  assert.ok(repairedText.includes('// existing user settings'));
+  await service.restore(result.id);
+  assert.equal(await fs.readFile(file.path, 'utf8'), original);
+});
+
 test("detect executable evidence without treating leftover directories as installed", async (t) => {
   const { root, bin, service } = await fixture(t);
   const found = await service.detect();
@@ -541,6 +583,7 @@ test('15 个应用的高级配置实际写入、保留原文件并逐字恢复',
       let original;
       if (file.path.endsWith('.env')) original = '# existing env\nOTHER_SECRET=keep-private\nGEMINI_API_KEY="old-key-123"\n';
       else if (file.path.endsWith('.toml')) original = 'unrelated = "keep"\n';
+      else if (file.path.endsWith('onekey-model-catalog.json')) original = '{"unrelated":"keep","models":[]}\n';
       else if (file.path.endsWith('.yaml') || file.path.endsWith('.yml')) original = file.path.endsWith('cordis.patch.yml') ? '- id: unrelated\n  config: { keep: true }\n' : file.path.endsWith('.credentials.yaml') ? 'version: 1\nrefs: { OLD_KEY: keep-private }\n' : 'unrelated: keep\n';
       else if (client === 'vscode') original = '[{"vendor":"other","name":"Keep","models":[]}]\n';
       else if (client === 'workbuddy') original = '[{"id":"other","vendor":"Other","name":"keep"}]\n';
@@ -706,4 +749,108 @@ test('selection readers recover client choices without a journal or model regist
   assert.deepEqual(config.models, ['chosen-in-client']);
   assert.equal(config.selectionSource, 'last-selection');
   assert.equal(config.selectionStatus, undefined);
+});
+
+test('edited preview writes selected content, keeps secret and restores exact original', async t => {
+ const {root,service}=await fixture(t,true);
+ const original='// retained original\n{"env":{"CUSTOM":"keep"}}\n';
+ await fs.mkdir(path.join(root,'.claude'),{recursive:true});
+ const file=path.join(root,'.claude/settings.json');await fs.writeFile(file,original);
+ const plan=await service.preview(input('claude','anthropic'));
+ const draft=plan.files[0];assert.equal(draft.editable,true);assert.ok(!draft.editContent.includes('sk-test-private-secret'));
+ await assert.rejects(service.apply({token:plan.token,edits:[{index:0,content:'{'}]}),/格式/);
+ assert.equal(await fs.readFile(file,'utf8'),original);
+ const value=JSON.parse(draft.editContent);value.customSetting='manual';
+ const result=await service.apply({token:plan.token,edits:[{index:0,content:JSON.stringify(value)}]});
+ const written=JSON.parse(await fs.readFile(file,'utf8'));assert.equal(written.customSetting,'manual');assert.equal(written.env.ANTHROPIC_AUTH_TOKEN,'sk-test-private-secret');
+ await service.restore(result.id);assert.equal(await fs.readFile(file,'utf8'),original);
+});
+
+
+test("detect Codex desktop by bundle id under legacy and renamed filenames", async t => {
+  const { root, bin } = await fixture(t);
+  const applicationDirs = [path.join(root, "system-apps"), path.join(root, "user-apps")];
+  for (const base of applicationDirs) await fs.mkdir(base);
+  const service = createAgentService({ home: root, dataDir: path.join(root, "state"),
+    platform: "darwin", env: { PATH: bin }, applicationDirs });
+  async function bundle(base, name, id) {
+    const app = path.join(base, name);
+    await fs.mkdir(path.join(app, "Contents"), { recursive: true });
+    await fs.writeFile(path.join(app, "Contents/Info.plist"),
+      `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${id}</string><key>CFBundleShortVersionString</key><string>1.0.0</string></dict></plist>`);
+    return app;
+  }
+  // A genuine ChatGPT app must not be offered as the Codex desktop client.
+  await bundle(applicationDirs[0], "ChatGPT.app", "com.openai.chat");
+  assert.equal((await service.detect()).find(c => c.id === "codex").bundle, undefined);
+  for (const name of ["ChatGPT.app", "My Codex.app"]) {
+    const app = await bundle(applicationDirs[1], name, "com.openai.codex");
+    const found = (await service.detect()).find(c => c.id === "codex");
+    assert.equal(found.bundle, app);
+    assert.equal(found.executable, path.join(bin, "codex"));
+    const { createAgentLauncher } = require("./agent-launcher.cjs");
+    let opened;
+    const launcher = createAgentLauncher({ detect: async () => [found],
+      openPath: async file => { opened = file; return ""; },
+      execute: async () => assert.fail("desktop selection must not open CLI") });
+    assert.deepEqual((await launcher.launch("codex")).choices.map(c => c.kind), ["desktop", "cli"]);
+    assert.equal((await launcher.launch({ client: "codex", target: "desktop" })).kind, "desktop");
+    assert.equal(opened, app);
+    await fs.rm(app, { recursive: true });
+  }
+});
+
+test('concurrent scans share probes, unchanged executables reuse versions, and config remains fresh', async t => {
+  const { root, bin } = await fixture(t, true);
+  let calls = 0;
+  const service = createAgentService({ home: root, dataDir: path.join(root, 'state'), platform: 'darwin', env: { PATH: bin },
+    applicationDirs: [], command: async () => { calls++; await new Promise(resolve => setTimeout(resolve, 10)); return { stdout: '1.2.3' }; } });
+  const [a, b] = await Promise.all([service.detect(), service.detect()]);
+  assert.deepEqual(a, b);
+  const firstCalls = calls;
+  assert.ok(firstCalls > 0);
+  await fs.mkdir(path.join(root, '.claude'), { recursive: true });
+  await fs.writeFile(path.join(root, '.claude/settings.json'), JSON.stringify({ env: { ANTHROPIC_MODEL: 'changed-model' } }));
+  const changed = await service.detect();
+  assert.equal(calls, firstCalls);
+  assert.equal(changed.find(item => item.id === 'claude').configuration.model, 'changed-model');
+  await fs.appendFile(path.join(bin, 'claude'), '\n# updated executable\n');
+  await service.detect();
+  assert.equal(calls, firstCalls + 1);
+  await fs.rm(path.join(bin, 'claude'));
+  assert.notEqual((await service.detect()).find(item => item.id === 'claude').executable, path.join(bin, 'claude'));
+});
+
+test('failed version probes are reused briefly without losing installation evidence', async t => {
+  const { root, bin } = await fixture(t, true);
+  let calls = 0;
+  const service = createAgentService({ home: root, dataDir: path.join(root, 'state'), platform: 'linux', env: { PATH: bin },
+    command: async () => { calls++; throw new Error('version timeout'); } });
+  await service.detect();
+  const firstCalls = calls;
+  const items = await service.detect();
+  assert.equal(calls, firstCalls);
+  assert.equal(items.find(item => item.id === 'claude').installed, true);
+  assert.equal(items.find(item => item.id === 'claude').version, '');
+});
+
+test('Hermes reads the selected installation stamp and rechecks it after upgrades', async t => {
+  const { root, bin } = await fixture(t, true);
+  const source = path.join(root, '.hermes/hermes-agent');
+  const launcher = path.join(source, '.hermes/bin/hermes');
+  await fs.mkdir(path.dirname(launcher), { recursive: true });
+  await fs.writeFile(launcher, '#!/bin/sh\n', { mode: 0o700 });
+  await fs.writeFile(path.join(bin, 'hermes'), '#!/bin/sh\nexec ' + launcher + ' "$@"\n');
+  const stamp = path.join(source, 'install-stamp.json');
+  await fs.writeFile(stamp, JSON.stringify({ baseVersion: '0.22.5' }));
+  let hermesProbes = 0;
+  const service = createAgentService({ home: root, dataDir: path.join(root, 'state'), platform: 'linux', env: { PATH: bin },
+    command: async file => { if (file === path.join(bin, 'hermes')) hermesProbes++; return { stdout: '1.2.3' }; } });
+  assert.equal((await service.detect()).find(item => item.id === 'hermes').version, '0.22.5');
+  await fs.writeFile(stamp, JSON.stringify({ baseVersion: '0.22.6' }));
+  assert.equal((await service.detect()).find(item => item.id === 'hermes').version, '0.22.6');
+  assert.equal(hermesProbes, 0);
+  await fs.writeFile(path.join(bin, 'hermes'), '#!/bin/sh\n# unrelated installation\n');
+  assert.equal((await service.detect()).find(item => item.id === 'hermes').version, '1.2.3');
+  assert.equal(hermesProbes, 1);
 });

@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld("onelinkDesktop", {
   test: (input) => ipcRenderer.invoke("onelink:test", input),
   keys: (org) => ipcRenderer.invoke("onelink:keys", org),
   wallet: (org) => ipcRenderer.invoke("onelink:wallet", org),
+  searchModels: input => ipcRenderer.invoke("onelink:search-models", input),
   models: (id) => ipcRenderer.invoke("onelink:models", id),
   localProviders: () => ipcRenderer.invoke("onelink:localProviders"),
   openLocalProviderWebsite: input => ipcRenderer.invoke("onelink:openLocalProviderWebsite", input),

@@ -20,6 +20,7 @@ const providerDetails = input => {
   return result;
 };
 
+const { validateProtocols, providerProtocols, modelProtocols } = require('./provider-protocols.cjs');
 const protocols = new Set(['openai', 'anthropic', 'responses', 'gemini']);
 const id = () => crypto.randomUUID();
 const cleanUrl = value => {
@@ -63,8 +64,8 @@ function createLocalProviderStore({ file, storage, encryption = { encrypt: value
     await fs.chmod(file, 0o600);
   }
   const publicProvider = provider => ({
-    id: provider.id, name: provider.name, notes: provider.notes || '', website: provider.website || '', baseURL: provider.baseURL, protocol: provider.protocol,
-    models: provider.models.map(model => ({ ...model })),
+    id: provider.id, name: provider.name, notes: provider.notes || '', website: provider.website || '', baseURL: provider.baseURL, protocol: provider.protocol, protocols: providerProtocols(provider),
+    models: provider.models.map(model => ({ ...model, protocols: modelProtocols(provider, model) })),
     createdAt: provider.createdAt, updatedAt: provider.updatedAt,
   });
   async function listProviders() { const data = await read(); return data.providers.map(publicProvider); }
@@ -76,15 +77,24 @@ function createLocalProviderStore({ file, storage, encryption = { encrypt: value
   async function createProvider(input = {}) {
     if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 100) throw new Error('模型服务商名称不能为空');
     if (!protocols.has(input.protocol)) throw new Error('请选择接口协议');
+    const supportedProtocols = validateProtocols(input.protocols || [input.protocol]);
+    if (!supportedProtocols.includes(input.protocol)) throw new Error('默认协议必须在支持的协议中');
     const secret = validateSecret(input.apiKey);
     const details = providerDetails(input);
     const now = new Date().toISOString();
     const data = await read();
-    const provider = { ...details, id: id(), name: input.name.trim(), baseURL: cleanUrl(input.baseURL).replace(input.protocol === 'gemini' ? /\/v1beta$/ : /$^/, ''), protocol: input.protocol, apiKey: encryption.encrypt(secret).toString('base64'), models: [], createdAt: now, updatedAt: now };
+    const provider = { ...details, id: id(), name: input.name.trim(), baseURL: cleanUrl(input.baseURL).replace(input.protocol === 'gemini' ? /\/v1beta$/ : /$^/, ''), protocol: input.protocol, protocols: supportedProtocols, apiKey: encryption.encrypt(secret).toString('base64'), models: [], createdAt: now, updatedAt: now };
     data.providers.push(provider); await write(data); return publicProvider(provider);
   }
   async function updateProvider(providerId, input = {}) {
     const data = await read(); const provider = data.providers.find(item => item.id === providerId); if (!provider) throw new Error('模型服务商不存在');
+    // Freeze legacy models to their original protocol before editing the provider.
+    provider.models.forEach(model => { model.protocols = modelProtocols(provider, model); });
+    const nextProtocols = validateProtocols(input.protocols || (input.protocol && !provider.protocols ? [input.protocol] : providerProtocols(provider)));
+    const nextDefault = input.protocol || provider.protocol;
+    if (!nextProtocols.includes(nextDefault)) throw new Error('默认协议必须在支持的协议中');
+    if (provider.models.some(model => model.protocols.some(value => !nextProtocols.includes(value)))) throw new Error('有模型正在使用待移除的协议，请先修改这些模型的协议');
+    provider.protocols = nextProtocols;
     Object.assign(provider, providerDetails(input));
     if (input.name !== undefined) { if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 100) throw new Error('模型服务商名称不能为空'); provider.name = input.name.trim(); }
     if (input.baseURL !== undefined) provider.baseURL = cleanUrl(input.baseURL);
@@ -99,11 +109,12 @@ function createLocalProviderStore({ file, storage, encryption = { encrypt: value
   }
   async function createModel(providerId, input = {}) {
     const data = await read(); const provider = data.providers.find(item => item.id === providerId); if (!provider) throw new Error('模型服务商不存在');
-    const modelId = validateModel(input.id); const model = { ...Object.fromEntries(Object.entries(validateModelSettings(input)).filter(([key]) => ['name', 'contextWindow', 'maxTokens', 'supportsImages', 'supportsTools', 'supportsReasoning'].includes(key))), id: modelId, name: String(input.name || modelId).trim().slice(0, 120), enabled: input.enabled !== false, isDefault: false };
+    const modelId = validateModel(input.id); const model = { ...Object.fromEntries(Object.entries(validateModelSettings(input)).filter(([key]) => ['name', 'contextWindow', 'maxTokens', 'supportsImages', 'supportsTools', 'supportsReasoning'].includes(key))), id: modelId, protocols: validateProtocols(input.protocols || [provider.protocol], providerProtocols(provider)), name: String(input.name || modelId).trim().slice(0, 120), enabled: input.enabled !== false, isDefault: false };
     if (provider.models.some(item => item.id === modelId)) throw new Error('模型已存在'); provider.models.push(model); provider.updatedAt = new Date().toISOString(); await write(data); return model;
   }
   async function updateModel(providerId, modelId, input = {}) {
     const data = await read(); const provider = data.providers.find(item => item.id === providerId); if (!provider) throw new Error('模型服务商不存在'); const model = provider.models.find(item => item.id === modelId); if (!model) throw new Error('模型不存在');
+    if (input.protocols !== undefined) model.protocols = validateProtocols(input.protocols, providerProtocols(provider));
     const settings = validateModelSettings({ ...model, ...input });
     for (const field of ['contextWindow', 'maxTokens', 'supportsImages', 'supportsTools', 'supportsReasoning']) {
       if (settings[field] !== undefined) model[field] = settings[field]; else delete model[field];
@@ -121,13 +132,14 @@ function createLocalProviderStore({ file, storage, encryption = { encrypt: value
     const provider = await getProvider(providerId); if (!provider.models.some(item => item.id === modelId && item.enabled)) throw new Error('只能将启用的模型设为默认'); const data = await read(); data.defaultModel = { providerId, modelId }; data.providers.forEach(item => item.models.forEach(model => { model.isDefault = item.id === providerId && model.id === modelId; })); await write(data); return data.defaultModel;
   }
   async function getCredential(providerId) { const provider = await getProvider(providerId); return { ...provider, apiKey: encryption.decrypt(Buffer.from(provider.apiKey, 'base64')) }; }
-  async function listModels() { const data = await read(); return data.providers.flatMap(provider => provider.models.map(model => ({ ...model, providerId: provider.id, providerName: provider.name, protocol: provider.protocol, baseURL: provider.baseURL }))); }
+  async function listModels() { const data = await read(); return data.providers.flatMap(provider => provider.models.map(model => ({ ...model, providerId: provider.id, providerName: provider.name, protocol: provider.protocol, protocols: modelProtocols(provider, model), baseURL: provider.baseURL }))); }
   async function syncModels(providerId, models) {
     // Validate the complete response before changing the encrypted store.
-    const incoming = models.map(model => ({ id: validateModel(model.id), name: String(model.name || model.id).slice(0, 120) }));
+    const incoming = models.map(model => ({ id: validateModel(model.id), name: String(model.name || model.id).slice(0, 120), ...(model.protocols !== undefined ? { protocols: validateProtocols(model.protocols) } : {}) }));
     const data = await read();
     const provider = data.providers.find(item => item.id === providerId);
     if (!provider) throw new Error('模型服务商不存在');
+    incoming.forEach(model => validateProtocols(model.protocols || [provider.protocol], providerProtocols(provider)));
     for (const model of incoming) if (!provider.models.some(item => item.id === model.id)) provider.models.push({ ...model, enabled: true, isDefault: false });
     provider.updatedAt = new Date().toISOString();
     await write(data);
@@ -135,11 +147,12 @@ function createLocalProviderStore({ file, storage, encryption = { encrypt: value
   }
   async function selectModels(providerId, models) {
     if (!Array.isArray(models) || models.length > 10000) throw new Error('模型选择无效');
-    const incoming = models.map(model => ({ id: validateModel(model.id), name: String(model.name || model.id).slice(0, 120) }));
+    const incoming = models.map(model => ({ id: validateModel(model.id), name: String(model.name || model.id).slice(0, 120), ...(model.protocols !== undefined ? { protocols: validateProtocols(model.protocols) } : {}) }));
     if (new Set(incoming.map(model => model.id)).size !== incoming.length) throw new Error('模型选择包含重复 ID');
     const data = await read();
     const provider = data.providers.find(item => item.id === providerId);
     if (!provider) throw new Error('模型服务商不存在');
+    incoming.forEach(model => validateProtocols(model.protocols || [provider.protocol], providerProtocols(provider)));
     provider.models = incoming.map(model => provider.models.find(item => item.id === model.id) || { ...model, enabled: true, isDefault: false });
     if (data.defaultModel?.providerId === providerId && !provider.models.some(model => model.id === data.defaultModel.modelId)) data.defaultModel = null;
     provider.updatedAt = new Date().toISOString();

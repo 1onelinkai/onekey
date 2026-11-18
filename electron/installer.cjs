@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
+const { ensureWindowsGit } = require('./windows-git-installer.cjs');
 const { createInstallCommand } = require('./install-command.cjs');
 const { nodeRoutes, npmRoutes, probeRoutes, configurePath } = require('./install-environment.cjs');
 const { installGrok } = require('./grok-installer.cjs');
@@ -40,15 +41,15 @@ const guides = {
   zed: 'https://zed.dev/download',
   vscode: 'https://code.visualstudio.com/download',
   zcode: 'https://zcode.z.ai/',
-  workbuddy: 'https://www.codebuddy.ai/',
+  workbuddy: 'https://www.workbuddy.cn/',
   hermes: 'https://github.com/NousResearch/hermes-agent',
   'claude-desktop': 'https://claude.ai/download',
   gemini: 'https://github.com/google-gemini/gemini-cli',
   grok: 'https://github.com/xai-org/grok-build',
   openclaw: 'https://github.com/openclaw/openclaw',
   minimax: 'https://github.com/MiniMax-AI/MiniMax-M2',
-  'deepseek-harness': 'https://github.com/deepseek-ai/deepseek-harness',
-  'deepseek-harness-desktop': 'https://github.com/deepseek-ai/deepseek-harness',
+  'deepseek-harness': 'https://www.deepseek.com/harness/',
+  'deepseek-harness-desktop': 'https://www.deepseek.com/harness/',
 };
 
 function environment({ platform = process.platform, arch = process.arch, machine = os.machine(), release = os.release(), env = process.env } = {}) {
@@ -64,11 +65,11 @@ function installationPlan(client, system) {
   if (!['x64', 'arm64'].includes(system.arch)) return { ...base, reason: '此客户端未提供可靠的 32 位安装支持；请使用 64 位系统' };
   if (system.platform === 'darwin' && Number(system.release.split('.')[0]) < 22) return { ...base, reason: '自动安装环境需要 macOS 13 或更新系统' };
   if (system.platform === 'win32' && Number(system.release.split('.')[0]) < 10) return { ...base, reason: '自动安装需要 Windows 10 / 11 或更新系统' };
-  if (desktops[client] && system.platform === 'darwin') return { ...base, supported: true, steps: ['获取当前架构的官方安装版本与 SHA-256', '下载官方安装包，GitHub 资源失败时尝试代理线路', '校验哈希、应用签名和硬件架构', '安装到用户 Applications 目录并重新检测'], notice: '无需管理员权限，不覆盖已有应用。下载信息来自 Homebrew Cask 元数据，文件来自厂商官方 CDN 或经过哈希校验的代理。', location: '~/Applications' };
+  if (desktops[client] && system.platform === 'darwin') return { ...base, supported: true, steps: ['获取当前架构的官方安装版本与 SHA-256', client === 'workbuddy' ? '从 WorkBuddy 官方 CDN 下载安装包，支持断点续传' : '下载官方安装包，GitHub 资源失败时尝试代理线路', '校验哈希、应用签名和硬件架构', '安装到用户 Applications 目录并重新检测'], notice: client === 'workbuddy' ? '无需管理员权限，不覆盖已有应用。版本、安装包地址和 SHA-256 来自 WorkBuddy 官方更新接口，安装包从官方 CDN 下载。' : '无需管理员权限，不覆盖已有应用。下载信息来自 Homebrew Cask 元数据，文件来自厂商官方 CDN 或经过哈希校验的代理。', location: '~/Applications' };
   if (client === 'hermes') return { ...base, supported: true, steps: ['探测 GitHub、GitClone、GHProxy、GHFast、GitMirror 等源码线路', '选择可用线路，固定提交并校验安装脚本', '检查 Git，准备 uv 和 Python 环境', '下载 Hermes 源码、安装依赖，失败自动切换', '生成命令入口、配置 PATH 并验证运行'], notice: '源码阶段会优先选择可用的国内代理；依赖使用清华 PyPI 镜像，并对源码阶段设置超时。首次安装可能较久；缺少系统开发工具时可能需要系统安装确认。基础安装跳过浏览器和电脑控制可选组件，模型由 OneLinkAI 配置。', location: system.platform === 'win32' ? '%LOCALAPPDATA%/hermes' : '~/.hermes' };
   if (client === 'grok') return { ...base, supported: true, steps: ['获取 Grok 官方 stable 版本', '下载当前系统架构的官方二进制，失败切换官方 GCS', '验证文件格式、架构和运行版本', '配置用户 PATH 并重新检测'], location: '~/.onelinkai/managed/bin', notice: '直接安装官方 Grok Build，无需 Node.js。通过 HTTPS 获取官方文件，安装失败清理程序；保留现有配置。首次使用仍需官方登录。' };
   if (!packages[client]) return { ...base, reason: '此桌面客户端暂未接入经过验证的自动安装渠道' };
-  return { ...base, supported: true, package: packages[client], steps: ['检测系统架构与下载线路，选择可用的低延迟源', '下载并校验独立 Node.js 24 LTS 环境', '安装客户端与依赖，线路失败自动切换', '配置用户 PATH、验证命令入口并复检版本'], location: '~/.onelinkai/managed', notice: '首次安装需要联网下载。自动选择官方或国内镜像；修改用户 PATH 前保留备份，不替换系统 Node.js 或 npm 源。Windows 的 Claude Code / Pi 还可能需要 Git Bash。' };
+  return { ...base, supported: true, package: packages[client], steps: ['检测系统架构与下载线路，选择可用的低延迟源', '下载并校验独立 Node.js 24 LTS 环境', '安装客户端与依赖，线路失败自动切换', '配置用户 PATH、验证命令入口并复检版本'], location: '~/.onelinkai/managed', notice: '首次安装需要联网下载。自动选择官方或国内镜像；修改用户 PATH 前保留备份，不替换系统 Node.js 或 npm 源。Windows 的 Claude Code / Pi 缺少 Git Bash 时将自动下载并校验官方便携版。' };
 }
 
 function createInstaller({ home = os.homedir(), system = environment(), detect, fetcher = fetch, runner, resolveEnvironment = async () => ({ ...process.env }) } = {}) {
@@ -294,6 +295,10 @@ function createInstaller({ home = os.homedir(), system = environment(), detect, 
         } else {
           log('可用磁盘空间：' + (await preflight(home, client) / 1024 ** 3).toFixed(1) + ' GiB；用户目录可写');
           await fs.mkdir(root, { recursive: true, mode: 0o700 });
+          if (system.platform === 'win32' && ['claude', 'pi'].includes(client)) {
+            installEnv = await ensureWindowsGit({ root, system, env: installEnv, execute, fetcher, log, state });
+            log('Git for Windows 与 Git Bash 已就绪');
+          }
           state.phase = 'network';
           log('探测 Node.js 与 npm 官方 / 国内镜像线路…');
           const [nodeResults, npmResults] = await Promise.all([
@@ -317,11 +322,7 @@ function createInstaller({ home = os.homedir(), system = environment(), detect, 
           state.phase = 'runtime';
           await ensureRuntime(nodeResults.filter(route => route.available));
           const nodeBin = system.platform === 'win32' ? runtime : path.join(runtime, 'bin');
-          const env = { ...installEnv, PATH: [nodeBin, bin, installEnv.PATH || ''].join(path.delimiter) };
-          // Git Bash is a runtime dependency for Claude Code on Windows.
-          if (system.platform === 'win32' && ['claude', 'pi'].includes(client)) {
-            await execute('git.exe', ['--version'], { env }).catch(() => { throw new Error('缺少 Git for Windows，请先安装 Git（含 Git Bash），再重试'); });
-          }
+          const env = { ...installEnv, PATH: [nodeBin, bin, installEnv.PATH || installEnv.Path || ''].join(system.platform === 'win32' ? ';' : path.delimiter) };
           state.phase = 'installing';
           const npm = path.join(runtime, system.platform === 'win32' ? 'node_modules/npm/bin/npm-cli.js' : 'lib/node_modules/npm/bin/npm-cli.js');
           const moduleRoot = path.join(prefix, system.platform === 'win32' ? 'node_modules' : 'lib/node_modules', packages[client]);
@@ -357,7 +358,7 @@ function createInstaller({ home = os.homedir(), system = environment(), detect, 
           const target = system.platform === 'win32' ? path.join(prefix, (commandNames[client] || client) + '.cmd') : path.join(prefix, 'bin', commandNames[client] || client);
           if (system.platform === 'win32') {
             if (/[\r\n%!"]/u.test(root)) throw new Error('当前用户路径含不支持的命令字符');
-            await fs.writeFile(path.join(bin, client + '.cmd'), `@echo off\r\nset "PATH=${nodeBin};%PATH%"\r\ncall "${target}" %*\r\n`, { mode: 0o700 });
+            await fs.writeFile(path.join(bin, client + '.cmd'), `@echo off\r\n${env.CLAUDE_CODE_GIT_BASH_PATH ? `set "CLAUDE_CODE_GIT_BASH_PATH=${env.CLAUDE_CODE_GIT_BASH_PATH}"\r\nset "PATH=${path.win32.dirname(env.CLAUDE_CODE_GIT_BASH_PATH)};${path.win32.join(path.win32.dirname(path.win32.dirname(env.CLAUDE_CODE_GIT_BASH_PATH)), 'cmd')};%PATH%"\r\n` : ''}set "PATH=${nodeBin};%PATH%"\r\ncall "${target}" %*\r\n`, { mode: 0o700 });
           } else {
             const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
             await fs.writeFile(path.join(bin, client), `#!/bin/sh\nexport PATH=${quote(nodeBin)}:"$PATH"\nexec ${quote(target)} "$@"\n`, { mode: 0o700 });

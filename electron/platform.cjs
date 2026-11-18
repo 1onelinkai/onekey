@@ -1,3 +1,4 @@
+const { fetchModelCatalog, searchModelCatalog } = require('./model-catalog.cjs');
 // Replace this adapter with authenticated OneLinkAI API calls when backend integration is ready.
 function createPlatformService({ modelEndpoint } = {}) {
   const organizations = ["个人工作空间", "OneLink 研发团队"];
@@ -33,6 +34,12 @@ function createPlatformService({ modelEndpoint } = {}) {
     })),
     wallet: async () => ({ available: 100, limit: 100, used: 0, remaining: 100, unlimited: false, period: "总额", percent: 0, organizationBalance: 100, coupon: 0, cycleType: 1 }),
     get,
+    searchModels: async ({ keyId, query } = {}) => {
+      await get(keyId);
+      if (typeof query !== 'string' || !query.trim() || query.length > 200) throw new Error('请输入有效的模型 ID');
+      if (modelEndpoint) return searchModelCatalog(await fetchModelCatalog({ baseURL: modelEndpoint }), query);
+      return [];
+    },
     models: async (id) => {
       const key = await get(id);
       if (modelEndpoint) {

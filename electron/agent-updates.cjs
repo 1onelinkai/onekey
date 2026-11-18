@@ -81,7 +81,7 @@ function createAgentUpdates({ detect, installer, uninstallPlan, home = os.homedi
       } catch { /* Do not classify an incomplete or redirected installation as managed. */ }
     }
     if (item.id === 'hermes' && uninstallPlan) {
-      const plan = await uninstallPlan(item.id);
+      const plan = await uninstallPlan(item.id, item);
       if (plan.kind === 'hermes') return { upgradable: true, kind: 'hermes', target: plan.target, origin: 'Hermes 官方源码安装' };
     }
     return { upgradable: false, target: item.executable || item.bundle, origin: '外部安装', reason: '此安装由其他工具管理，请使用原安装渠道或客户端内置更新。' };

@@ -11,6 +11,7 @@ test('live adapter authenticates, scopes keys, refreshes once and refuses masked
   let expired = true;
   let refreshes = 0;
   let masked = false;
+  let searchFailure = false;
   const calls = [];
   const fetcher = async (url, options) => {
     const endpoint = new URL(url).pathname;
@@ -30,6 +31,18 @@ test('live adapter authenticates, scopes keys, refreshes once and refuses masked
       assert.equal(new URL(url).searchParams.get('userId'), '7');
       data = { availableAmountRaw: '72.5', budgetLimit: '100', usedAmount: '27.5', tenantBalance: '80', cycleType: 2, status: 1 };
     } else if (endpoint === '/user/user/apikey/detail') data = { status: 1, apiKeyPlain: masked ? 'sk-********abcd' : 'sk-test-complete-key' };
+    else if (endpoint === '/v1/public/models/grouped-by-month') {
+      if (searchFailure) return { ok: false, status: 503 };
+      assert.equal(options.headers?.Authorization, undefined);
+      return { ok: true, json: async () => ({ code: 0, data: { data: [
+        { month: '2026-11', models: [
+          { modelId: 'model-1', showInSquare: false },
+          { modelId: 'hidden-model-id', name: 'Hidden', type: '文本模型', showInSquare: false },
+        ] },
+        { month: '2026-10', models: [{ modelId: 'hidden-model-id' }, { id: 'invalid-record' }] },
+      ] } }) };
+    }
+    else if (endpoint === '/api/v1/models') assert.fail('The square listing excludes hidden models');
     else if (endpoint === '/v1/models') { assert.equal(options.headers.Authorization, 'Bearer sk-test-complete-key'); return { ok: true, json: async () => ({ data: [{ id: 'model-1' }] }) }; }
     else if (endpoint === '/log/user/call/supplierList') data = [{ supplierId: 12, supplierName: '测试供应商' }];
     else if (endpoint === '/log/user/call/modelList') data = [{ modelId: 'model-1', modelName: '测试模型' }];
@@ -62,7 +75,15 @@ test('live adapter authenticates, scopes keys, refreshes once and refuses masked
   assert.equal(wallet.limit, 100);
   assert.equal(wallet.used, 27.5);
   assert.equal(wallet.organizationBalance, 80);
-  assert.deepEqual(await service.models(keys[0].id), [{ id: 'model-1', name: 'model-1', category: '其他', owner: '' }]);
+  assert.deepEqual(await service.models(keys[0].id), [{ id: 'model-1', name: 'model-1', category: '其他', owner: '', showInSquare: false }]);
+  assert.deepEqual(await service.searchModels({ keyId: keys[0].id, query: ' hidden-model-id ' }), [
+    { id: 'hidden-model-id', name: 'Hidden', category: '文本模型', owner: '', showInSquare: false },
+  ]);
+  await assert.rejects(service.searchModels({ keyId: keys[0].id, query: ' ' }), /模型 ID/);
+  await assert.rejects(service.searchModels({ keyId: 'missing-key', query: 'hidden-model-id' }), /密钥列表/);
+  searchFailure = true;
+  await assert.rejects(service.searchModels({ keyId: keys[0].id, query: 'hidden-model-id' }), /HTTP 503/);
+  searchFailure = false;
   const logs = await service.requests({ org: '8', keyId: keys[0].id });
   assert.equal(logs.connected, true);
   assert.equal(logs.items[0].time, '2026-10-20 18:30:00');

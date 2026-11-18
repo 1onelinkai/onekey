@@ -23,7 +23,7 @@ function resolveArtifact(client, metadata, arch) {
   return { url, sha256, app: spec.app };
 }
 
-async function installDesktop({ client, home, root, system, fetcher, execute, log, state, detect }) {
+async function installDesktop({ client, home, root, system, fetcher, execute, log, state, detect, removeDirectory = fs.rm }) {
   if (system.platform !== 'darwin') throw new Error('桌面自动安装当前仅接入 macOS');
   const spec = desktops[client];
   state.phase = 'network';
@@ -37,6 +37,13 @@ async function installDesktop({ client, home, root, system, fetcher, execute, lo
     for (const [name, prefix] of [['GHProxy', 'https://gh-proxy.com/'], ['GHFast', 'https://ghfast.top/']]) routes.push({ name, url: prefix + artifact.url });
   }
   state.routes = { downloads: routes.map(route => ({ ...route, available: false })) };
+  const markDownloaded = route => {
+    state.routes.downloads = state.routes.downloads.map(item => ({ ...item, selected: item.name === route.name, available: item.name === route.name }));
+  };
+  async function cleanTemporary(directory) {
+    try { await removeDirectory(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); }
+    catch (error) { log('临时文件清理未完成（不影响安装结果）：' + directory + '；' + error.message); }
+  }
   const stage = await fs.mkdtemp(path.join(root, 'desktop-'));
   const cache = path.join(root, 'downloads');
   await fs.mkdir(cache, { recursive: true, mode: 0o700 });
@@ -57,14 +64,14 @@ async function installDesktop({ client, home, root, system, fetcher, execute, lo
         if (offset) {
           const cachedHash = crypto.createHash('sha256');
           for await (const chunk of createReadStream(archive)) cachedHash.update(chunk);
-          if (cachedHash.digest('hex') === artifact.sha256) { log('已校验完整下载缓存'); downloaded = true; break; }
+          if (cachedHash.digest('hex') === artifact.sha256) { log('已校验完整下载缓存'); markDownloaded(route); downloaded = true; break; }
         }
         if (offset) log('尝试断点续传：' + (offset / 1024 ** 2).toFixed(1) + ' MiB');
         const response = await fetcher(route.url, { redirect: 'follow', headers: offset ? { Range: 'bytes=' + offset + '-' } : {}, signal: AbortSignal.timeout(20 * 60 * 1000) });
         if (response.status === 416) {
           const hash = crypto.createHash('sha256');
           for await (const chunk of createReadStream(archive)) hash.update(chunk);
-          if (hash.digest('hex') === artifact.sha256) { downloaded = true; break; }
+          if (hash.digest('hex') === artifact.sha256) { markDownloaded(route); downloaded = true; break; }
           await fs.rm(archive, { force: true }); throw new Error('下载缓存不完整，已清理，下次重新下载');
         }
         if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -83,7 +90,7 @@ async function installDesktop({ client, home, root, system, fetcher, execute, lo
           }
         } finally { await handle.close(); }
         if (hash.digest('hex') !== artifact.sha256) { await fs.rm(archive, { force: true }); throw new Error('安装包 SHA-256 不匹配'); }
-        state.routes.downloads = state.routes.downloads.map(item => ({ ...item, selected: item.name === route.name, available: item.name === route.name }));
+        markDownloaded(route);
         downloaded = true; break;
       } catch (error) { log(route.name + ' 失败：' + error.message); }
     }
@@ -126,14 +133,14 @@ async function installDesktop({ client, home, root, system, fetcher, execute, lo
       await execute('/usr/bin/ditto', [source, temporary], { timeout: 180000 });
       await execute('/usr/bin/codesign', ['--verify', '--deep', '--strict', temporary], { timeout: 120000 });
       await fs.rename(temporary, destination);
-    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+    } finally { await cleanTemporary(temporary); }
     state.phase = 'verifying';
     state.detected = (await detect()).find(item => item.id === client && item.installed);
     if (!state.detected) throw new Error('应用已写入，但安装后检测失败：' + destination);
     log('安装完成：' + artifact.app + ' ' + version + '；签名和硬件架构已验证');
   } finally {
     if (mounted) await execute('/usr/bin/hdiutil', ['detach', mount], { timeout: 30000 }).catch(error => log('磁盘映像卸载失败：' + error.message));
-    if (!mounted || !await fs.readdir(mount).then(items => items.length, () => 0)) await fs.rm(stage, { recursive: true, force: true });
+    if (!mounted || !await fs.readdir(mount).then(items => items.length, () => 0)) await cleanTemporary(stage);
   }
 }
 module.exports = { desktops, resolveArtifact, installDesktop };

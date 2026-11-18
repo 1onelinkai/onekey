@@ -7,6 +7,7 @@ const { promisify } = require("node:util");
 const jsonc = require("jsonc-parser");
 const toml = require("@iarna/toml");
 const YAML = require("yaml");
+const { createEditable, resolveEdit } = require("./preview-editor.cjs");
 const { settingsForClient } = require("./model-settings.cjs");
 const exec = promisify(execFile);
 const hash = (value) =>
@@ -271,7 +272,43 @@ function createAgentService({
         }
     return null;
   }
+  const versionCache = new Map();
+  let detectionPending;
   async function detect() {
+    if (detectionPending) return detectionPending;
+    detectionPending = scanClients().finally(() => { detectionPending = null; });
+    return detectionPending;
+  }
+  async function cachedVersion(executable) {
+    const resolved = await fs.realpath(executable);
+    const stat = await fs.stat(resolved);
+    const fingerprint = [resolved, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(':');
+    const cached = versionCache.get(executable);
+    if (cached?.fingerprint === fingerprint && Date.now() - cached.time < 30000) return cached.version;
+    let version = '';
+    try {
+      const out = await command(executable, ['--version'], {
+        timeout: 4000, maxBuffer: 8192,
+        env: { ...env, PATH: [...(env.PATH || '').split(path.delimiter), '/usr/bin', '/bin', '/opt/homebrew/bin', path.dirname(executable)].join(path.delimiter) },
+      });
+      version = (out.stdout || '').match(/\d+\.\d+(?:\.\d+)?(?:[-.\w]*)/)?.[0] || '';
+    } catch { /* Cache failed probes briefly too, so slow commands do not block every scan. */ }
+    versionCache.set(executable, { fingerprint, version, time: Date.now() });
+    return version;
+  }
+  async function hermesStampedVersion(executable) {
+    // Only use the install stamp belonging to the selected Hermes launcher.
+    const source = path.join(home, '.hermes/hermes-agent');
+    const launcher = path.join(source, '.hermes/bin/hermes');
+    try {
+      const resolved = await fs.realpath(executable);
+      const expected = await fs.realpath(launcher);
+      if (resolved !== expected && (await fs.readFile(executable, 'utf8')).trim() !== '#!/bin/sh\nexec ' + launcher + ' "$@"') return '';
+      const stamp = JSON.parse(await fs.readFile(path.join(source, 'install-stamp.json'), 'utf8'));
+      return require('semver').valid(stamp.baseVersion) ? stamp.baseVersion : '';
+    } catch { return ''; }
+  }
+  async function scanClients() {
     return Promise.all(
       ids.map(async (id) => {
         const executable = await locate(id);
@@ -285,6 +322,26 @@ function createAgentService({
               break;
             } catch {}
           }
+        // Codex may retain a legacy or user-renamed app filename. Identify the
+        // desktop app by its bundle id, never by an embedded CLI/helper process.
+        if (platform === "darwin" && id === "codex" && !bundle) {
+          for (const base of applicationDirs) {
+            const entries = await fs.readdir(base).catch(() => []);
+            for (const name of entries.filter(name => name.endsWith(".app"))) {
+              const candidate = path.join(base, name);
+              try {
+                const { stdout } = await command("/usr/libexec/PlistBuddy", [
+                  "-c", "Print :CFBundleIdentifier", path.join(candidate, "Contents/Info.plist"),
+                ], { timeout: 3000, maxBuffer: 8192 });
+                if (stdout.trim() === "com.openai.codex") {
+                  bundle = candidate;
+                  break;
+                }
+              } catch {}
+            }
+            if (bundle) break;
+          }
+        }
         let version = "";
         // Read the selected managed package directly, including Windows .cmd shims.
         const managedBin = path.join(home, '.onelinkai/managed/bin');
@@ -295,30 +352,10 @@ function createAgentService({
             if (require('semver').valid(manifest.version)) version = manifest.version;
           } catch {}
         }
-        if (executable && !version) {
-          try {
-            // Windows command shims need a shell; do not interpolate or execute them here.
-            if (platform !== "win32" || executable.endsWith(".exe")) {
-              const out = await command(executable, ["--version"], {
-                timeout: 4000,
-                maxBuffer: 8192,
-                env: {
-                  ...env,
-                  PATH: [
-                    ...(env.PATH || "").split(path.delimiter),
-                    "/usr/bin",
-                    "/bin",
-                    "/opt/homebrew/bin",
-                    path.dirname(executable),
-                  ].join(path.delimiter),
-                },
-              });
-              version =
-                (out.stdout || "").match(
-                  /\d+\.\d+(?:\.\d+)?(?:[-.\w]*)/,
-                )?.[0] || "";
-            }
-          } catch {}
+        if (executable && !version && id === 'hermes') version = await hermesStampedVersion(executable);
+        const bundleVersionPreferred = bundle && ['vscode', 'zed', 'zcode', 'workbuddy', 'claude-desktop'].includes(id);
+        if (executable && !version && !bundleVersionPreferred && (platform !== 'win32' || executable.endsWith('.exe'))) {
+          try { version = await cachedVersion(executable); } catch {}
         }
         if (bundle && (['vscode', 'zed', 'zcode', 'workbuddy', 'claude-desktop'].includes(id) || !version))
           try {
@@ -355,6 +392,7 @@ function createAgentService({
           version,
           executable,
           bundle,
+          launchChoices: require("./agent-launcher.cjs").launchChoices({ id, bundle, executable }),
           configExists,
           configuration,
           path: dirs[id],
@@ -569,6 +607,7 @@ function createAgentService({
       await add("config.toml", (text) => {
         const data = text === null ? {} : toml.parse(text);
         data.model = model;
+        data.model_catalog_json = path.join(dir, 'onekey-model-catalog.json');
         if (settings.contextWindow) data.model_context_window = settings.contextWindow;
         if (settings.compactThreshold) {
           if (data.model_context_window && settings.compactThreshold >= data.model_context_window) throw new Error("自动压缩阈值必须小于上下文窗口");
@@ -578,6 +617,11 @@ function createAgentService({
         if (settings.reviewModel) data.review_model = settings.reviewModel;
         if (data.model_context_window && data.model_auto_compact_token_limit >= data.model_context_window) throw new Error("现有自动压缩阈值不小于新上下文窗口，请一并调整阈值");
         data.model_provider = "onelinkai";
+        if (data.profile && data.profiles?.[data.profile]) {
+          Object.assign(data.profiles[data.profile], {
+            model, model_provider: 'onelinkai', model_catalog_json: data.model_catalog_json,
+          });
+        }
         data.model_providers ||= {};
         data.model_providers.onelinkai = {
           ...(data.model_providers.onelinkai || {}),
@@ -591,6 +635,7 @@ function createAgentService({
         delete data.model_providers.onelinkai.env_http_headers;
         return toml.stringify(data);
       });
+      await add('onekey-model-catalog.json', text => require('./codex-catalog.cjs').updateCatalog(text, model, modelName, settings));
     }
     if (client === "opencode") {
       const file = await fs.access(path.join(dir, "opencode.jsonc")).then(
@@ -825,6 +870,7 @@ function createAgentService({
                     tools: settings.supportsTools ?? true,
                     images: settings.supportsImages ?? false,
                     parallel_tool_calls: true,
+                    prompt_cache_key: false,
                     chat_completions: true,
                   },
                 },
@@ -840,7 +886,7 @@ function createAgentService({
       ignored: ignored.filter(label => label !== "模型显示名称" || input.modelSettings?.name !== model),
       files,
       credential,
-      notice: client === "zed" && !credentials ? "模型定义已写入，请在 Zed 的模型设置中为 OneLinkAI 手动填写 API Key。本应用不访问系统钥匙串。" : client === "vscode" ? "模型定义已生成，密钥尚未写入。请在 VS Code 的管理模型中打开 OneLinkAI / Custom Endpoint，填写 API Key 并保存到 VS Code 密钥存储，再选择模型。此配置写入默认用户配置，其他 VS Code Profile 需单独设置。" : client === "gemini" ? "已配置 Google Gemini 原生协议；重启终端后开启新会话。项目 .env 或已导出的环境变量可能覆盖全局凭据，请在 Gemini 内确认。" : client === "claude-desktop" ? "已生成 Claude Desktop 第三方网关 profile，请完全退出并重启 Claude Desktop 后选择 OneLinkAI。直连使用 Anthropic Messages 与 Claude 角色模型。" : client === "grok" ? "已选择 OneLinkAI Responses 模型，请重启 Grok Build 或开启新会话。" : ["deepseek-harness", "deepseek-harness-desktop"].includes(client) ? `已配置 DSH ${client === "deepseek-harness" ? "CLI" : "桌面版"} 的 ${input.dshProfile} profile；${client === "deepseek-harness" ? `使用 dsh --profile ${input.dshProfile} 启动，` : "完全退出并重启桌面版，"}配置写入校验不代表模型请求成功。` : ["workbuddy", "zcode"].includes(client)
+      notice: client === "codex" ? "已写入 Codex 默认模型与 One Key 模型目录。客户端需完全退出后重新打开，并在新对话中选择配置的模型；已有对话保留原模型，点击运行不会强制切换已有对话。其他配置工具可能覆盖这些设置。" : client === "zed" ? (credentials ? "模型定义与 API Key 已写入 macOS 钥匙串并回读校验。请完全退出并重新打开 Zed；首次读取时如系统请求钥匙串授权，请允许 Zed 访问。" : "模型定义已写入，请在 Zed 的 Settings → AI → LLM Providers → OneLinkAI 手动填写 API Key。当前平台尚不支持自动写入 Zed 凭据。") : client === "vscode" ? "模型定义已生成，密钥尚未写入。请在 VS Code 的管理模型中打开 OneLinkAI / Custom Endpoint，填写 API Key 并保存到 VS Code 密钥存储，再选择模型。此配置写入默认用户配置，其他 VS Code Profile 需单独设置。" : client === "gemini" ? "已配置 Google Gemini 原生协议；重启终端后开启新会话。项目 .env 或已导出的环境变量可能覆盖全局凭据，请在 Gemini 内确认。" : client === "claude-desktop" ? "已生成 Claude Desktop 第三方网关 profile，请完全退出并重启 Claude Desktop 后选择 OneLinkAI。直连使用 Anthropic Messages 与 Claude 角色模型。" : client === "grok" ? "已选择 OneLinkAI Responses 模型，请重启 Grok Build 或开启新会话。" : ["deepseek-harness", "deepseek-harness-desktop"].includes(client) ? `已配置 DSH ${client === "deepseek-harness" ? "CLI" : "桌面版"} 的 ${input.dshProfile} profile；${client === "deepseek-harness" ? `使用 dsh --profile ${input.dshProfile} 启动，` : "完全退出并重启桌面版，"}配置写入校验不代表模型请求成功。` : ["workbuddy", "zcode"].includes(client)
         ? "配置后重启客户端，在模型列表中选择 OneLinkAI 模型。"
         : "配置后请重启客户端或开启新会话；已运行会话可能继续使用旧配置。",
     };
@@ -854,6 +900,8 @@ function createAgentService({
       files: plan.files.map((f) => ({
         path: f.path,
         existed: f.before !== null,
+        editable: f.editor?.editable === true,
+        editContent: f.editor?.editable ? f.editor.content : undefined,
         content: ["deepseek-harness", "deepseek-harness-desktop"].includes(plan.input.client) && f.path.endsWith(".credentials.yaml")
           ? "# DSH 凭据文件：本次 API Key 与已有凭据均已隐藏\n"
           : plan.input.client === "gemini" && f.path.endsWith(".env") ? "# Gemini 环境凭据文件：预览隐藏全部内容\n# 将更新 GEMINI_API_KEY 和 GOOGLE_GEMINI_BASE_URL，其他环境变量保留\n" : redact(f.after),
@@ -872,17 +920,31 @@ function createAgentService({
     if (!detected.installed)
       throw new Error("未检测到此客户端，请先安装或检查可执行文件路径");
     if (plans.size > 20) plans.clear();
+    for (const file of plan.files) file.editor = createEditable(file, plan.input.apiKey);
     plan.token = crypto.randomUUID();
     plan.created = Date.now();
     plans.set(plan.token, plan);
     return publicPlan(plan);
   }
-  async function apply(token) {
+  async function apply(request) {
+    const token = typeof request === 'string' ? request : request?.token;
     return serialize(async () => {
       const plan = plans.get(token);
-      plans.delete(token);
       if (!plan || Date.now() - plan.created > 10 * 60 * 1000)
         throw new Error("配置预览已过期，请重新预览");
+      const edits = typeof request === 'object' ? request.edits : undefined;
+      if (edits !== undefined) {
+        if (!Array.isArray(edits) || edits.length > plan.files.length) throw new Error('编辑文件列表无效');
+        const seen = new Set();
+        const changes = edits.map(edit => {
+          if (!Number.isInteger(edit?.index) || !plan.files[edit.index] || seen.has(edit.index)) throw new Error('编辑文件无效');
+          seen.add(edit.index);
+          const file = plan.files[edit.index];
+          return { file, content: resolveEdit(file.editor, edit.content) };
+        });
+        for (const { file, content } of changes) file.after = content;
+      }
+      plans.delete(token);
       for (const file of plan.files)
         if (hash(await read(file.path)) !== hash(file.before))
           throw new Error("配置已被其他程序修改，请重新预览：" + file.path);

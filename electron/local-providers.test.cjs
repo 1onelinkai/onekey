@@ -165,3 +165,36 @@ test('确认选择原子增删模型，保留规格与停用状态并清理被�
   await store.selectModels(provider.id, []);
   assert.deepEqual(await store.listModels(), []);
 });
+
+test('服务商和模型分别保存多协议，拒绝越界和空协议并保留导入模型设置', async () => {
+  const { resolveModelProtocol } = require('./provider-protocols.cjs');
+  const store = createLocalProviderStore();
+  const provider = await store.createProvider({ name: 'Multi', baseURL: 'https://example.com', protocol: 'openai', protocols: ['openai', 'responses', 'anthropic'], apiKey: 'multi-secret' });
+  await store.createModel(provider.id, { id: 'chat', protocols: ['openai'] });
+  await store.createModel(provider.id, { id: 'mixed', protocols: ['anthropic', 'responses'] });
+  await assert.rejects(store.createModel(provider.id, { id: 'bad', protocols: ['gemini'] }), /协议/);
+  await assert.rejects(store.updateModel(provider.id, 'chat', { protocols: [] }), /协议/);
+  await assert.rejects(store.updateProvider(provider.id, { protocols: ['openai', 'responses'] }), /正在使用/);
+  await assert.rejects(store.updateProvider(provider.id, { protocol: 'gemini' }), /默认协议/);
+  await store.selectModels(provider.id, [{ id: 'chat', protocols: ['responses'] }, { id: 'mixed' }, { id: 'new', protocols: ['responses'] }]);
+  const models = await store.listModels();
+  assert.deepEqual(models.map(model => model.protocols), [['openai'], ['anthropic', 'responses'], ['responses']]);
+  const credential = await store.getCredential(provider.id);
+  assert.equal(resolveModelProtocol(credential, models[1]), 'anthropic');
+  assert.equal(resolveModelProtocol(credential, models[1], 'responses'), 'responses');
+  assert.throws(() => resolveModelProtocol(credential, models[1], 'openai'), /不支持/);
+  const snapshot = await store.listProviders();
+  await assert.rejects(store.selectModels(provider.id, [{ id: 'valid', protocols: ['openai'] }, { id: 'invalid', protocols: ['gemini'] }]), /协议/);
+  assert.deepEqual(await store.listProviders(), snapshot);
+});
+
+test('旧数据升级后保留模型原协议，修改默认拉取协议不会改变模型协议', async () => {
+  let saved = { providers: [{ id: 'legacy', name: 'Old', protocol: 'openai', baseURL: 'https://example.com', models: [{ id: 'old', name: 'Old', enabled: true }] }] };
+  const store = createLocalProviderStore({ storage: { load: () => structuredClone(saved), save: value => { saved = structuredClone(value); } } });
+  assert.deepEqual((await store.listProviders())[0].protocols, ['openai']);
+  assert.deepEqual((await store.listModels())[0].protocols, ['openai']);
+  await store.updateProvider('legacy', { protocols: ['openai', 'responses'], protocol: 'responses' });
+  assert.deepEqual((await store.listModels())[0].protocols, ['openai']);
+  await store.createModel('legacy', { id: 'new' });
+  assert.deepEqual((await store.listModels())[1].protocols, ['responses']);
+});

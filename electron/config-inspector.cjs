@@ -58,7 +58,7 @@ function createConfigInspector({ dirs, home, env, claudeDesktopThreepDir, profil
     const names = {
       claude: ['settings.json', 'settings.local.json', '.mcp.json'],
       'claude-desktop': ['claude_desktop_config.json'],
-      codex: ['config.toml', 'auth.json'], gemini: ['settings.json', '.env', 'oauth_creds.json'],
+      codex: ['config.toml', 'onekey-model-catalog.json', 'auth.json'], gemini: ['settings.json', '.env', 'oauth_creds.json'],
       grok: ['config.toml'], opencode: ['opencode.jsonc', 'opencode.json'],
       openclaw: [env.OPENCLAW_CONFIG_PATH ? path.basename(env.OPENCLAW_CONFIG_PATH) : 'openclaw.json', '.env'],
       pi: ['settings.json', 'models.json', 'models-store.json', 'auth.json'], minimax: ['config.yaml'],

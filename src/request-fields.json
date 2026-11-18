@@ -21,7 +21,7 @@
   ["audioInput", "音频输入"],
   ["audioOutput", "音频输出"],
   ["charInput", "字符计费"],
-  ["sell", "费用 / 积分"],
+  ["sell", "费用"],
   ["latency", "首 Token 延迟"],
   ["throughput", "吞吐量（tokens/s）"],
   ["trainPolicy", "数据政策"],

@@ -12,8 +12,51 @@ function createUninstaller({ detect, execute, trashItem, home = os.homedir(), pl
     try { for (const file of paths) await fs.access(file, fs.constants.W_OK); return true; }
     catch { return false; }
   }
+  async function windowsNpmTarget(item) {
+    const packageName = packages[item.id];
+    if (!packageName || !/\.cmd$/i.test(item.executable || '')) return null;
+    try {
+      const prefix = path.dirname(item.executable);
+      const module = path.join(prefix, 'node_modules', packageName);
+      const manifest = JSON.parse(await fs.readFile(path.join(module, 'package.json'), 'utf8'));
+      const command = path.basename(item.executable).replace(/\.cmd$/i, '');
+      const entry = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.[command];
+      if (manifest.name !== packageName || typeof entry !== 'string') return null;
+      const realModule = await fs.realpath(module);
+      const executable = await fs.realpath(path.resolve(module, entry));
+      if (!executable.startsWith(realModule + path.sep)) return null;
+      const shim = (await fs.readFile(item.executable, 'utf8')).replaceAll('\\', '/').toLowerCase();
+      const relativeEntry = path.relative(prefix, path.resolve(module, entry)).replaceAll('\\', '/').toLowerCase();
+      if (!shim.includes(relativeEntry)) return null;
+      const nodes = [path.join(prefix, 'node.exe')];
+      try {
+        const result = await execute('where.exe', ['node.exe'], { timeout: 10000, windowsHide: true });
+        const output = typeof result === 'string' ? result : result.stdout;
+        nodes.push(...String(output || '').trim().split(/\r?\n/).filter(value => path.isAbsolute(value)));
+      } catch { /* Check the colocated runtime. */ }
+      for (const node of nodes) {
+        const candidates = [path.join(prefix, 'node_modules/npm'), path.join(path.dirname(node), 'node_modules/npm')];
+        for (const npmRoot of new Set(candidates)) {
+          try {
+            await fs.access(node);
+            const npmManifest = JSON.parse(await fs.readFile(path.join(npmRoot, 'package.json'), 'utf8'));
+            if (npmManifest.name !== 'npm') continue;
+            const npm = path.join(npmRoot, 'bin/npm-cli.js');
+            await fs.access(npm);
+            return { supported: true, client: item.id, kind: 'external-npm', target: item.executable,
+              executable: await fs.realpath(item.executable), manager: node,
+              args: [npm, 'uninstall', '--global', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', packageName],
+              source: 'npm · ' + packageName,
+              notice: '使用 npm 卸载此客户端，保留配置、会话、项目和共享 Node.js。请先退出客户端及后台服务；安装目录需要管理员权限时会弹出 Windows 系统授权窗口，授权后继续卸载。' };
+          } catch { /* Try the runtime associated with the installed npm. */ }
+        }
+      }
+    } catch { /* Unknown shims are handled through Windows application management. */ }
+    return null;
+  }
   async function externalTarget(item) {
-    if (!item.executable || platform === 'win32') return null;
+    if (platform === 'win32') return windowsNpmTarget(item);
+    if (!item.executable) return null;
     const packageName = packages[item.id];
     try {
       const executable = await fs.realpath(item.executable);
@@ -97,6 +140,9 @@ function createUninstaller({ detect, execute, trashItem, home = os.homedir(), pl
   }
   async function plan(client) {
     const item = (await detect()).find(item => item.id === client);
+    return describe(item, client);
+  }
+  async function describe(item, client = item?.id) {
     if (!item?.installed) throw new Error('未检测到已安装的客户端');
     if (client === 'hermes') {
       const source = await hermesTarget(item);
@@ -125,6 +171,9 @@ function createUninstaller({ detect, execute, trashItem, home = os.homedir(), pl
     };
     const external = await externalTarget(item);
     if (external) return external;
+    if (platform === 'win32') return { supported: true, client, kind: 'system-settings', target: item.executable || item.bundle,
+      source: 'Windows 外部安装',
+      notice: '打开 Windows“已安装的应用”，搜索此客户端并使用系统卸载入口。npm 命令未能确认安装来源时，请使用原包管理器卸载。' };
     return { supported: false, client, target: item.executable || item.bundle,
       notice: '该客户端由外部安装工具管理，暂不能可靠自动卸载。请使用原安装工具或系统应用管理卸载；不会直接删除未知来源的程序。' };
   }
@@ -132,16 +181,20 @@ function createUninstaller({ detect, execute, trashItem, home = os.homedir(), pl
     const current = await plan(client);
     if (!current.supported) throw new Error(current.notice);
     if (target !== current.target) throw new Error('安装位置已变化，请重新打开卸载窗口');
+    if (current.kind === 'system-settings') {
+      await execute('explorer.exe', ['ms-settings:appsfeatures'], { timeout: 15000, windowsHide: true });
+      return { removed: false, remaining: true, message: '已打开 Windows 应用管理，请搜索客户端并完成卸载' };
+    }
     if (current.kind === 'external-npm' || current.kind === 'brew') {
       try {
-        const options = { timeout: 120000,
+        const options = { timeout: 120000, windowsHide: true,
           env: { ...process.env, PATH: [path.dirname(current.manager), process.env.PATH || ''].join(path.delimiter) } };
-        if (current.requiresAuthorization) await runAuthorized(execute, current.manager, current.args);
+        if (current.requiresAuthorization) await runAuthorized(execute, current.manager, current.args, platform);
         else {
           try { await execute(current.manager, current.args, options); }
           catch (error) {
-            if (platform !== 'darwin' || current.kind !== 'external-npm' || !/EACCES|EPERM|permission denied/i.test([error.message, error.stderr].join(' '))) throw error;
-            await runAuthorized(execute, current.manager, current.args);
+            if (!['darwin', 'win32'].includes(platform) || current.kind !== 'external-npm' || !/EACCES|EPERM|permission denied/i.test([error.code, error.message, error.stderr].join(' '))) throw error;
+            await runAuthorized(execute, current.manager, current.args, platform);
           }
         }
       } catch (error) {
@@ -179,6 +232,6 @@ function createUninstaller({ detect, execute, trashItem, home = os.homedir(), pl
     const remaining = (await detect()).find(item => item.id === client && item.installed);
     return { removed: true, remaining: !!remaining, message: remaining ? '已移除所选安装，但本机仍检测到另一份客户端' : '已卸载客户端，配置和数据已保留' };
   }
-  return { plan, uninstall };
+  return { plan, describe, uninstall };
 }
 module.exports = { createUninstaller };

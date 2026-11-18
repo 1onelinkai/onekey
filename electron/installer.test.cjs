@@ -88,3 +88,40 @@ test('failed runtime hash checks preserve existing runtime and close proxy resou
   assert.equal(await fs.readFile(path.join(runtime, 'old-runtime'), 'utf8'), 'preserve');
   assert.deepEqual((await fs.readdir(path.dirname(runtime))).filter(p => p.startsWith('runtime-')), []);
 });
+
+test('WorkBuddy installation plan describes its official metadata and CDN', () => {
+  const plan = installationPlan('workbuddy', { platform: 'darwin', arch: 'arm64', release: '24.0' });
+  assert.equal(plan.supported, true);
+  assert.match(plan.notice, /WorkBuddy 官方更新接口/);
+  assert.doesNotMatch(plan.notice + plan.steps.join(' '), /Homebrew|GitHub/);
+});
+
+test('Windows desktop download guides use the official WorkBuddy and DeepSeek Harness sites', () => {
+  for (const arch of ['x64', 'arm64']) {
+    const system = { platform: 'win32', arch, release: '10.0.22631' };
+    for (const [client, guide] of [['workbuddy', 'https://www.workbuddy.cn/'], ['deepseek-harness-desktop', 'https://www.deepseek.com/harness/']]) {
+      const plan = installationPlan(client, system);
+      assert.equal(plan.supported, false);
+      assert.equal(plan.guide, guide);
+    }
+    const cli = installationPlan('deepseek-harness', system);
+    assert.equal(cli.supported, true);
+    assert.equal(cli.guide, 'https://www.deepseek.com/harness/');
+  }
+});
+
+test('missing Windows Git Bash triggers automatic download before runtime downloads', async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'onekey-win-git-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  let downloads = 0;
+  const service = createInstaller({ home, system: { platform: 'win32', arch: 'x64', release: '10.0' },
+    detect: async () => [], resolveEnvironment: async () => ({ PATH: '' }),
+    runner: async () => { throw Error('not installed'); },
+    fetcher: async () => { downloads++; throw Error('must not download'); },
+  });
+  await service.install('claude');
+  for(let i=0;i<100 && service.status().running;i++) await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(service.status().phase, 'failed');
+  assert.match(service.status().error, /Git for Windows 自动安装失败/);
+  assert.equal(downloads, 1);
+});

@@ -351,3 +351,146 @@ test('DSH uninstall selects the CLI or desktop installation without removing its
   await fs.access(bundle); await assert.rejects(fs.access(path.join(bin, 'dsh')), { code: 'ENOENT' });
   assert.equal(await fs.readFile(config, 'utf8'), 'keep');
 });
+
+test('Windows external npm uninstall verifies shim ownership and preserves user data', async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'onekey-win-external-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const prefix = path.join(home, 'npm');
+  const module = path.join(prefix, 'node_modules/@openai/codex');
+  const executable = path.join(prefix, 'codex.cmd');
+  await fs.mkdir(module, { recursive: true });
+  await fs.mkdir(path.join(prefix, 'node_modules/npm/bin'), { recursive: true });
+  await fs.writeFile(path.join(module, 'package.json'), JSON.stringify({ name: '@openai/codex', bin: { codex: 'cli.js' } }));
+  await fs.writeFile(path.join(module, 'cli.js'), 'client');
+  await fs.writeFile(executable, '@echo off\n"%dp0%node.exe" "%dp0%node_modules\\@openai\\codex\\cli.js" %*');
+  await fs.writeFile(path.join(prefix, 'node.exe'), 'runtime');
+  await fs.writeFile(path.join(prefix, 'node_modules/npm/package.json'), '{"name":"npm"}');
+  await fs.writeFile(path.join(prefix, 'node_modules/npm/bin/npm-cli.js'), 'npm');
+  await fs.writeFile(path.join(home, 'config'), 'keep');
+  let removed = false;
+  const service = createUninstaller({ home, platform: 'win32', detect: async () => removed ? [] : [{id:'codex', installed:true, executable}],
+    execute: async (file, args) => {
+      if (file === 'where.exe') throw Error('not in PATH');
+      assert.equal(file, path.join(prefix, 'node.exe'));
+      assert.ok(args.includes('@openai/codex')); assert.ok(args.includes('--ignore-scripts'));
+      assert.equal(args[args.indexOf('--prefix')+1], prefix);
+      await fs.unlink(executable); removed = true;
+    } });
+  assert.equal((await service.plan('codex')).kind, 'external-npm');
+  await fs.writeFile(executable, 'unrelated shim');
+  assert.equal((await service.plan('codex')).kind, 'system-settings');
+  await fs.writeFile(executable, 'node_modules/@openai/codex/cli.js');
+  await assert.rejects(service.uninstall({client:'codex', target:'/wrong'}), /变化/);
+  assert.equal((await service.uninstall({client:'codex', target:executable})).removed, true);
+  assert.equal(await fs.readFile(path.join(home, 'config'), 'utf8'), 'keep');
+});
+
+for (const outputKind of ['string', 'execFile']) test(`Windows npm uninstall finds a separate Node runtime from ${outputKind} output`, async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'onekey-win-node-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const prefix = path.join(home, 'node_global');
+  const module = path.join(prefix, 'node_modules/openclaw');
+  const executable = path.join(prefix, 'openclaw.cmd');
+  const node = path.join(home, 'nodejs/node.exe');
+  const npm = path.join(home, 'nodejs/node_modules/npm/bin/npm-cli.js');
+  await fs.mkdir(module, { recursive: true });
+  await fs.mkdir(path.dirname(npm), { recursive: true });
+  await fs.writeFile(path.join(module, 'package.json'), JSON.stringify({ name: 'openclaw', bin: { openclaw: 'openclaw.mjs' } }));
+  await fs.writeFile(path.join(module, 'openclaw.mjs'), 'client');
+  await fs.writeFile(executable, '@echo off\nnode "%dp0%\\node_modules\\openclaw\\openclaw.mjs" %*');
+  await fs.writeFile(node, 'shared runtime');
+  await fs.writeFile(path.join(path.dirname(path.dirname(npm)), 'package.json'), '{"name":"npm"}');
+  await fs.writeFile(npm, 'shared npm');
+  const config = path.join(home, 'openclaw-config');
+  await fs.writeFile(config, 'keep');
+  let removed = false;
+  const service = createUninstaller({ home, platform: 'win32',
+    detect: async () => removed ? [] : [{ id: 'openclaw', installed: true, executable }],
+    execute: async (file, args) => {
+      if (file === 'where.exe') {
+        assert.deepEqual(args, ['node.exe']);
+        const stdout = node + '\r\n';
+        return outputKind === 'string' ? stdout : { stdout, stderr: '' };
+      }
+      assert.equal(file, node);
+      assert.deepEqual(args, [npm, 'uninstall', '--global', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', 'openclaw']);
+      await fs.unlink(executable);
+      await fs.rm(module, { recursive: true });
+      removed = true;
+      return { stdout: 'removed 1 package', stderr: '' };
+    }, trashItem: async () => assert.fail('npm owns this installation') });
+  const plan = await service.plan('openclaw');
+  assert.equal(plan.kind, 'external-npm');
+  assert.equal(plan.source, 'npm · openclaw');
+  assert.equal(plan.manager, node);
+  assert.equal((await service.uninstall({ client: 'openclaw', target: executable })).removed, true);
+  assert.equal(await fs.readFile(config, 'utf8'), 'keep');
+  assert.equal(await fs.readFile(node, 'utf8'), 'shared runtime');
+  assert.equal(await fs.readFile(npm, 'utf8'), 'shared npm');
+});
+
+for (const outcome of ['authorize', 'cancel', 'failure', 'no-removal', 'ordinary-error']) test(`Windows npm permission retry handles ${outcome}`, async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'onekey-win-permission-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const prefix = path.join(home, 'node_global');
+  const module = path.join(prefix, 'node_modules/openclaw');
+  const executable = path.join(prefix, 'openclaw.cmd');
+  const node = path.join(prefix, 'node.exe');
+  await fs.mkdir(module, { recursive: true });
+  await fs.mkdir(path.join(prefix, 'node_modules/npm/bin'), { recursive: true });
+  await fs.writeFile(path.join(module, 'package.json'), JSON.stringify({ name: 'openclaw', bin: { openclaw: 'openclaw.mjs' } }));
+  await fs.writeFile(path.join(module, 'openclaw.mjs'), 'client');
+  await fs.writeFile(executable, 'node_modules/openclaw/openclaw.mjs');
+  await fs.writeFile(node, 'shared runtime');
+  await fs.writeFile(path.join(prefix, 'node_modules/npm/package.json'), '{"name":"npm"}');
+  await fs.writeFile(path.join(prefix, 'node_modules/npm/bin/npm-cli.js'), 'shared npm');
+  await fs.writeFile(path.join(home, 'config'), 'keep');
+  let attempts = 0;
+  let elevated = 0;
+  let removed = false;
+  const service = createUninstaller({ home, platform: 'win32',
+    detect: async () => removed ? [] : [{ id: 'openclaw', installed: true, executable }],
+    execute: async (file, args, options) => {
+      if (file === 'where.exe') return { stdout: '', stderr: '' };
+      if (file === node) {
+        attempts++;
+        if (outcome === 'ordinary-error') throw new Error('npm package metadata invalid');
+        throw Object.assign(new Error('npm uninstall rejected'), { stderr: 'npm error code EPERM\nnpm error syscall mkdir' });
+      }
+      assert.equal(file, 'powershell.exe');
+      assert.equal(options.windowsHide, true);
+      elevated++;
+      const outer = Buffer.from(args[3], 'base64').toString('utf16le');
+      assert.match(outer, /-Verb RunAs -WindowStyle Hidden -PassThru -Wait/);
+      const child = Buffer.from(outer.match(/'-EncodedCommand', '([^']+)'/)[1], 'base64').toString('utf16le');
+      assert.ok(child.includes("'--ignore-scripts'"));
+      assert.ok(child.includes("'openclaw'"));
+      assert.ok(child.includes("'" + prefix.replaceAll("'", "''") + "'"));
+      if (outcome === 'cancel') throw Object.assign(new Error('Authorization cancelled'), { stderr: 'ONEKEY_AUTHORIZATION_CANCELLED' });
+      if (outcome === 'failure') {
+        const output = child.match(/Out-File -LiteralPath '((?:''|[^'])*)' -Encoding utf8/)[1].replaceAll("''", "'");
+        await fs.writeFile(output, 'npm error EPERM: OpenClaw files are still locked');
+        throw new Error('Command failed');
+      }
+      if (outcome === 'authorize') { await fs.unlink(executable); removed = true; }
+      return { stdout: '', stderr: '' };
+    }, trashItem: async () => assert.fail('must use npm') });
+  const plan = await service.plan('openclaw');
+  assert.match(plan.notice, /Windows 系统授权/);
+  const action = service.uninstall({ client: 'openclaw', target: executable });
+  if (outcome === 'authorize') assert.equal((await action).removed, true);
+  else await assert.rejects(action, outcome === 'cancel' ? /已取消系统授权/ : outcome === 'failure' ? /still locked/ : outcome === 'no-removal' ? /仍存在/ : /metadata invalid/);
+  assert.equal(attempts, 1);
+  assert.equal(elevated, outcome === 'ordinary-error' ? 0 : 1);
+  assert.equal(await fs.readFile(path.join(home, 'config'), 'utf8'), 'keep');
+  assert.equal(await fs.readFile(node, 'utf8'), 'shared runtime');
+  if (outcome !== 'authorize') await fs.access(executable);
+});
+
+test('Windows unknown install opens system management without claiming removal', async () => {
+  const service = createUninstaller({platform:'win32', detect:async()=>[{id:'workbuddy', installed:true, bundle:'C:\\Apps\\WorkBuddy.exe'}],
+    execute:async(file,args)=>{assert.equal(file,'explorer.exe');assert.deepEqual(args,['ms-settings:appsfeatures']);},
+    trashItem:async()=>assert.fail('must not delete external app')});
+  assert.equal((await service.plan('workbuddy')).kind,'system-settings');
+  assert.equal((await service.uninstall({client:'workbuddy',target:'C:\\Apps\\WorkBuddy.exe'})).removed,false);
+});
